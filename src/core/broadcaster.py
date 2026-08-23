@@ -1,93 +1,71 @@
-from types.events import (
-    ChatMessageEvent,
-    CheerEvent,
-    FollowEvent,
-    GiftSubscriptionEvent,
-    RaidEvent,
-    SubscriptionEvent,
-)
+from __future__ import annotations
 
-from twitchio.chatter import Chatter
-from twitchio.ext import commands
+import json
+import logging
+from types.events import Event
+from types.events_mapper import encapsulate
 
-from utils.badge_resolver import BadgeResolver
+from aiohttp import web
+
+from core.event_bus import EventBus
+
+logger = logging.getLogger(__name__)
 
 
-class Broadcaster(commands.Bot):
-    """The broadcaster bot that listens to Twitch events and publishes them to the bus."""
+class Broadcaster:
+    """
+    WebSocket EventBus Relay:
+    - Relays EventBus events to connected WebSocket clients (OBS overlays, Python scripts, etc.) via JSON protocol.
+    - Supports bidirectional messaging: incoming client messages are rebroadcast to others.
+    - Temporary design—pending dedicated command class takeover.
+    """
 
-    def __init__(
-        self,
-        token: str,
-        client_id: str,
-        prefix: str,
-        channel: str,
-        bus,
-        badge_resolver: BadgeResolver,
-    ):
-        super().__init__(
-            token=token,
-            client_id=client_id,
-            nick=channel,
-            prefix=prefix,
-            initial_channels=[channel],
-        )
-        self.bus = bus
-        self.badge_resolver = badge_resolver
+    def __init__(self):
+        self._clients: set[web.WebSocketResponse] = set()
 
-    async def event_ready(self):
-        print(f"Bot logged in as {self.nick}, channels: {self.connected_channels}")
+    def subscribe_to(self, bus: EventBus, *event_types: type[Event]) -> None:
+        for event_type in event_types:
+            bus.subscribe(event_type, self._relay)
 
-    async def event_message(self, message):
-        if message.echo:
-            return
+    async def _relay(self, event: Event) -> None:
+        await self.send(encapsulate(event))
 
-        author = message.author
-        default_color = "#a970ff"
-        if isinstance(author, Chatter):
-            badges = self.badge_resolver.resolve(author.badges or {})
-            color = author.color or default_color
-        else:
-            badges = []
-            color = default_color
+    async def send(
+        self, payload: dict, exclude: web.WebSocketResponse | None = None
+    ) -> None:
+        message = json.dumps(payload)
+        dead: list[web.WebSocketResponse] = []
+        for client in self._clients:
+            if client is exclude:
+                continue
+            try:
+                await client.send_str(message)
+            except ConnectionResetError:
+                dead.append(client)
+        for client in dead:
+            self._clients.discard(client)
 
-        await self.bus.publish(
-            ChatMessageEvent(
-                user=author.name or "User",
-                text=message.content or "",
-                color=color,
-                badges=badges,
-            )
-        )
-        await self.handle_commands(message)
+    async def websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        self._clients.add(ws)
 
-    async def event_follow(self, channel, user):
-        await self.bus.publish(FollowEvent(user=user.name))
+        try:
+            async for msg in ws:
+                if msg.type == web.WSMsgType.TEXT:
+                    try:
+                        payload = json.loads(msg.data)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Message websocket invalide ignoré: %r", msg.data
+                        )
+                        continue
+                    # TODO: router vers la classe de commandes plutôt que
+                    # rediffuser tel quel, une fois qu'elle existe.
+                    await self.send(payload, exclude=ws)
+                elif msg.type == web.WSMsgType.ERROR:
+                    break
+        finally:
+            self._clients.discard(ws)
 
-    async def event_subscription(self, user, channel, tags):
-        months = int(tags.get("msg-param-cumulative-months") or 1)
-        tier = tags.get("msg-param-sub-plan") or "1000"
-        await self.bus.publish(
-            SubscriptionEvent(user=user.name, months=months, tier=tier)
-        )
-
-    async def event_subscription_gift(self, channel, tags):
-        gifter = tags.get("display-name") or tags.get("login") or "Anonymous"
-        recipient = tags.get("msg-param-recipient-display-name") or "someone"
-        total = int(tags.get("msg-param-sender-count") or 1)
-        tier = tags.get("msg-param-sub-plan") or "1000"
-        await self.bus.publish(
-            GiftSubscriptionEvent(
-                gifter=gifter, recipient=recipient, gifter_total=total, tier=tier
-            )
-        )
-
-    async def event_cheer(self, channel, tags, message):
-        user = tags.get("display-name") or tags.get("login") or "Anonymous"
-        bits = int(tags.get("bits") or 0)
-        await self.bus.publish(CheerEvent(user=user, bits=bits, message=message or ""))
-
-    async def event_raid(self, channel, tags):
-        raider = tags.get("msg-param-displayName") or tags.get("login") or "Unknown"
-        viewer_count = int(tags.get("msg-param-viewerCount") or 0)
-        await self.bus.publish(RaidEvent(raider=raider, viewer_count=viewer_count))
+        return ws
