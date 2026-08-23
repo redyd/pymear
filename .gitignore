@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+resources/temp/*
+!resources/temp/.gitkeep
+.zed
