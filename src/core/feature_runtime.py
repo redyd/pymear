@@ -4,6 +4,7 @@ import asyncio
 import logging
 import socket
 from collections import deque
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import aiohttp
@@ -43,6 +44,7 @@ class FeatureRuntime:
         port: int | None = None,
         hub_url: str = "ws://localhost:8765/ws",
         buffer_size: int = 20,
+        on_event: Callable[[Event], Awaitable[None] | None] | None = None,
     ):
         self.name = name
         self._event_types = tuple(event_types)
@@ -51,6 +53,7 @@ class FeatureRuntime:
         self.hub_url = hub_url
         self._buffer: deque[dict] = deque(maxlen=buffer_size)
         self._sse_queues: set[asyncio.Queue[dict]] = set()
+        self._on_event = on_event
 
     async def run(self) -> None:
         app = self._build_app()
@@ -146,6 +149,14 @@ class FeatureRuntime:
 
         if not isinstance(event, self._event_types):
             return
+
+        if self._on_event is not None:
+            try:
+                result = self._on_event(event)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception("Feature %s: erreur dans on_event", self.name)
 
         encoded = encapsulate(event)
         self._buffer.append(encoded)
