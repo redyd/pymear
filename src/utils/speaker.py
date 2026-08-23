@@ -15,19 +15,16 @@ class TextToSpeech:
                 self.engine.setProperty('voice', voice.id)
                 break
 
-        self.set_rate(rate)
-        self.set_volume(volume)
+        self.setRate(rate)
+        self.setVolume(volume)
 
-    def set_rate(self, rate):
+    def setRate(self, rate):
         self.engine.setProperty('rate', rate)
 
-    def set_volume(self, volume):
+    def setVolume(self, volume):
         self.engine.setProperty('volume', volume)
 
     def say(self, text):
         self.engine.say(text)
         print(f"[TTS]: Saying {len(text.split(' '))} words.")
         self.engine.runAndWait()
-
-tts = TextToSpeech(140, 2)
-tts.say("Bonjour ceci est un test en français.")
