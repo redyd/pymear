@@ -4,7 +4,6 @@ import json
 import logging
 
 from aiohttp import web
-
 from contracts.events import Event
 from contracts.events_mapper import encapsulate
 from core.event_bus import EventBus

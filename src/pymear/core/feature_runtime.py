@@ -9,7 +9,6 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
-
 from contracts.events import Event
 from contracts.events_mapper import decapsulate, encapsulate
 

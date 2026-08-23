@@ -4,8 +4,6 @@ import asyncio
 import os
 
 from aiohttp import web
-from dotenv import load_dotenv
-
 from contracts.events import (
     ChatMessageEvent,
     CheerEvent,
@@ -17,6 +15,7 @@ from contracts.events import (
 from core.broadcaster import Broadcaster
 from core.event_bus import EventBus
 from core.event_exporter import EventExporter
+from dotenv import load_dotenv
 from utils.badge_resolver import BadgeResolver
 from utils.helix_client import get_user_id
 

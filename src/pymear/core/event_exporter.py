@@ -1,14 +1,6 @@
+from contracts.events import *
 from twitchio.chatter import Chatter
 from twitchio.ext import commands
-
-from contracts.events import (
-    ChatMessageEvent,
-    CheerEvent,
-    FollowEvent,
-    GiftSubscriptionEvent,
-    RaidEvent,
-    SubscriptionEvent,
-)
 from utils.badge_resolver import BadgeResolver
 
 

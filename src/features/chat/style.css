@@ -1,0 +1,64 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: transparent;
+    font-family: "Inter", "Segoe UI", sans-serif;
+    overflow: hidden;
+}
+
+#chat {
+    width: 100vw;
+    height: 100vh;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: hidden;
+}
+
+.message {
+    background: rgba(0, 0, 0, 0.55);
+    color: #f0f0f0;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 16px;
+    line-height: 1.4;
+    animation: fade-in 0.2s ease-out;
+    width: fit-content;
+    max-width: 100%;
+}
+
+.badges {
+    display: inline-flex;
+    gap: 3px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.badges img {
+    height: 18px;
+    width: 18px;
+}
+
+.user {
+    font-weight: 600;
+}
+
+.text {
+    word-break: break-word;
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
