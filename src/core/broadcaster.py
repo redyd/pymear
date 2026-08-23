@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class Broadcaster:
     """
-    WebSocket EventBus Relay:
+    WebSocket Broadcaster Relay:
     - Relays EventBus events to connected WebSocket clients (OBS overlays, Python scripts, etc.) via JSON protocol.
     - Supports bidirectional messaging: incoming client messages are rebroadcast to others.
     - Temporary design—pending dedicated command class takeover.
