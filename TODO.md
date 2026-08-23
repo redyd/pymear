@@ -1,0 +1,4 @@
+- fix le pb des types dans FeatureRuntime
+- ajouter les commandes
+- + encapsuler les features (notemment mieux gérer la fin d'exécution)
+- mieux gérer le logging
