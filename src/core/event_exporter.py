@@ -1,4 +1,7 @@
-from types.events import (
+from twitchio.chatter import Chatter
+from twitchio.ext import commands
+
+from contracts.events import (
     ChatMessageEvent,
     CheerEvent,
     FollowEvent,
@@ -6,10 +9,6 @@ from types.events import (
     RaidEvent,
     SubscriptionEvent,
 )
-
-from twitchio.chatter import Chatter
-from twitchio.ext import commands
-
 from utils.badge_resolver import BadgeResolver
 
 

@@ -4,7 +4,8 @@ import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from types.events import Event
+
+from contracts.events import Event
 
 logger = logging.getLogger(__name__)
 

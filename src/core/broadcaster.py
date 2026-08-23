@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
-from types.events import Event
-from types.events_mapper import encapsulate
 
 from aiohttp import web
 
+from contracts.events import Event
+from contracts.events_mapper import encapsulate
 from core.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
