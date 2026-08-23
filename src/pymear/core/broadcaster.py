@@ -4,9 +4,10 @@ import json
 import logging
 
 from aiohttp import web
-from contracts.events import Event
-from contracts.events_mapper import encapsulate
-from core.event_bus import EventBus
+
+from pymear.contracts.events import Event
+from pymear.contracts.events_mapper import encapsulate
+from pymear.core.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 

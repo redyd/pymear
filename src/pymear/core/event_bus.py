@@ -5,7 +5,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 
-from contracts.events import Event
+from pymear.contracts.events import Event
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,8 @@
-from contracts.events import *
 from twitchio.chatter import Chatter
 from twitchio.ext import commands
-from utils.badge_resolver import BadgeResolver
+
+from pymear.contracts.events import *
+from pymear.utils.badge_resolver import BadgeResolver
 
 
 class EventExporter(commands.Bot):

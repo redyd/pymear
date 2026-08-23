@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from contracts.events import ChatMessageEvent
-from core.feature_runtime import FeatureRuntime
+from pymear.contracts.events import ChatMessageEvent
+from pymear.core.feature_runtime import FeatureRuntime
 
 
 async def log_message(event: ChatMessageEvent) -> None:

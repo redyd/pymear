@@ -9,8 +9,9 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
-from contracts.events import Event
-from contracts.events_mapper import decapsulate, encapsulate
+
+from pymear.contracts.events import Event
+from pymear.contracts.events_mapper import decapsulate, encapsulate
 
 logger = logging.getLogger(__name__)
 
@@ -60,17 +61,15 @@ class FeatureRuntime:
         await runner.setup()
         site = web.TCPSite(runner, port=self.port)
         await site.start()
-        logger.info(
-            "Feature %s: UI servie sur http://localhost:%s", self.name, self.port
-        )
+        print(f"Feature '{self.name}': UI served on http://localhost:{self.port}")
 
         await self._listen_hub()
 
     def _build_app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/events", self._sse_handler)
-        app.router.add_static("/", path=self.static_dir, show_index=False)
         app.router.add_get("/", self._index_handler)
+        app.router.add_static("/", path=self.static_dir, show_index=False)
         return app
 
     async def _index_handler(self, request: web.Request) -> web.FileResponse:

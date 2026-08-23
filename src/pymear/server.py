@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 from aiohttp import web
-from contracts.events import (
+from dotenv import load_dotenv
+
+from pymear.contracts.events import (
     ChatMessageEvent,
     CheerEvent,
     FollowEvent,
@@ -12,12 +15,16 @@ from contracts.events import (
     RaidEvent,
     SubscriptionEvent,
 )
-from core.broadcaster import Broadcaster
-from core.event_bus import EventBus
-from core.event_exporter import EventExporter
-from dotenv import load_dotenv
-from utils.badge_resolver import BadgeResolver
-from utils.helix_client import get_user_id
+from pymear.core.broadcaster import Broadcaster
+from pymear.core.event_bus import EventBus
+from pymear.core.event_exporter import EventExporter
+from pymear.utils.badge_resolver import BadgeResolver
+from pymear.utils.helix_client import get_user_id
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 load_dotenv()
 
