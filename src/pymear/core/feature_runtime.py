@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import socket
 from collections import deque
@@ -24,8 +25,11 @@ def _find_free_port() -> int:
 
 class FeatureRuntime:
     """
-    Feature Foundation (WebSocket → SSE):
-    - Common base for all features: connects to hub via WebSocket, filters relevant events, buffers them, and restreams as SSE to served HTML/JS pages.
+    Feature Foundation (WebSocket -> SSE):
+    - Common base for all features: connects to hub via WebSocket, filters relevant events,
+      buffers them, and restreams as SSE to served HTML/JS pages.
+    - Also registers itself with the routing proxy (name + port) so it becomes reachable
+      under http://localhost:<proxy_port>/<name>/ without needing a fixed port.
 
     Usage:
     runtime = FeatureRuntime(
@@ -43,7 +47,7 @@ class FeatureRuntime:
         static_dir: Path,
         port: int | None = None,
         hub_url: str = "ws://localhost:8765/ws",
-        buffer_size: int = 20,
+        proxy_url: str = "ws://localhost:9000/register",
         on_event: Callable[[Event], Awaitable[None] | None] | None = None,
     ):
         self.name = name
@@ -51,7 +55,7 @@ class FeatureRuntime:
         self.static_dir = static_dir
         self.port = port if port is not None else _find_free_port()
         self.hub_url = hub_url
-        self._buffer: deque[dict] = deque(maxlen=buffer_size)
+        self.proxy_url = proxy_url
         self._sse_queues: set[asyncio.Queue[dict]] = set()
         self._on_event = on_event
 
@@ -63,7 +67,7 @@ class FeatureRuntime:
         await site.start()
         print(f"Feature '{self.name}': UI served on http://localhost:{self.port}")
 
-        await self._listen_hub()
+        await asyncio.gather(self._listen_hub(), self._register_with_proxy())
 
     def _build_app(self) -> web.Application:
         app = web.Application()
@@ -86,8 +90,6 @@ class FeatureRuntime:
         await response.prepare(request)
 
         queue: asyncio.Queue[dict] = asyncio.Queue()
-        for payload in self._buffer:
-            await queue.put(payload)
         self._sse_queues.add(queue)
 
         try:
@@ -103,13 +105,28 @@ class FeatureRuntime:
 
     @staticmethod
     def _to_sse_frame(payload: dict) -> bytes:
-        import json
-
         return f"data: {json.dumps(payload)}\n\n".encode()
+
+    async def _connect_with_retry(self, session: aiohttp.ClientSession, url: str, label: str):
+        delay = 1
+        while True:
+            try:
+                async with session.ws_connect(url) as ws:
+                    delay = 1
+                    yield ws
+            except (aiohttp.ClientError, ConnectionRefusedError):
+                logger.warning(
+                    "Feature %s: %s injoignable, nouvel essai dans %ss",
+                    self.name,
+                    label,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)
 
     async def _listen_hub(self) -> None:
         async with aiohttp.ClientSession() as session:
-            async for ws in self._connect_with_retry(session):
+            async for ws in self._connect_with_retry(session, self.hub_url, "hub"):
                 try:
                     async for msg in ws:
                         if msg.type != aiohttp.WSMsgType.TEXT:
@@ -120,25 +137,20 @@ class FeatureRuntime:
                         "Feature %s: connexion hub perdue, reconnexion...", self.name
                     )
 
-    async def _connect_with_retry(self, session: aiohttp.ClientSession):
-        delay = 1
-        while True:
-            try:
-                async with session.ws_connect(self.hub_url) as ws:
-                    delay = 1
-                    yield ws
-            except (aiohttp.ClientError, ConnectionRefusedError):
-                logger.warning(
-                    "Feature %s: hub injoignable, nouvel essai dans %ss",
-                    self.name,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 30)
+    async def _register_with_proxy(self) -> None:
+        async with aiohttp.ClientSession() as session:
+            async for ws in self._connect_with_retry(session, self.proxy_url, "proxy"):
+                try:
+                    await ws.send_str(json.dumps({"name": self.name, "port": self.port}))
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.ERROR:
+                            break
+                except ConnectionResetError:
+                    logger.warning(
+                        "Feature %s: connexion proxy perdue, reconnexion...", self.name
+                    )
 
     async def _handle_hub_message(self, raw: str) -> None:
-        import json
-
         try:
             payload = json.loads(raw)
             event = decapsulate(payload)
@@ -157,6 +169,6 @@ class FeatureRuntime:
                 logger.exception("Feature %s: erreur dans on_event", self.name)
 
         encoded = encapsulate(event)
-        self._buffer.append(encoded)
+        # Distribution directe sans stockage
         for queue in self._sse_queues:
             await queue.put(encoded)
