@@ -2,3 +2,5 @@
 - ajouter les commandes
 - + encapsuler les features (notemment mieux gérer la fin d'exécution)
 - mieux gérer le logging
+- proxy
+- simplifier server.py

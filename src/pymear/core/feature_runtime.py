@@ -4,9 +4,9 @@ import asyncio
 import json
 import logging
 import socket
-from collections import deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Generic, TypeVar
 
 import aiohttp
 from aiohttp import web
@@ -14,6 +14,7 @@ from aiohttp import web
 from pymear.contracts.events import Event
 from pymear.contracts.events_mapper import decapsulate, encapsulate
 
+E = TypeVar("E", bound=Event)
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +24,7 @@ def _find_free_port() -> int:
         return sock.getsockname()[1]
 
 
-class FeatureRuntime:
+class FeatureRuntime(Generic[E]):
     """
     Feature Foundation (WebSocket -> SSE):
     - Common base for all features: connects to hub via WebSocket, filters relevant events,
@@ -43,21 +44,20 @@ class FeatureRuntime:
     def __init__(
         self,
         name: str,
-        event_types: list[type[Event]],
+        event_types: list[type[E]],
         static_dir: Path,
         port: int | None = None,
-        hub_url: str = "ws://localhost:8765/ws",
-        proxy_url: str = "ws://localhost:9000/register",
-        on_event: Callable[[Event], Awaitable[None] | None] | None = None,
+        hub_port: int = 8765,
+        proxy_port: int = 9000,
     ):
         self.name = name
         self._event_types = tuple(event_types)
         self.static_dir = static_dir
         self.port = port if port is not None else _find_free_port()
-        self.hub_url = hub_url
-        self.proxy_url = proxy_url
+        self.hub_url = f"ws://localhost:{hub_port}/ws"
+        self.proxy_url = f"ws://localhost:{proxy_port}/register"
         self._sse_queues: set[asyncio.Queue[dict]] = set()
-        self._on_event = on_event
+        self._events: list[Callable[[E], Awaitable[None] | None]] = []
 
     async def run(self) -> None:
         app = self._build_app()
@@ -68,6 +68,10 @@ class FeatureRuntime:
         print(f"Feature '{self.name}': UI served on http://localhost:{self.port}")
 
         await asyncio.gather(self._listen_hub(), self._register_with_proxy())
+
+
+    def add_handler(self, handler: Callable[[E], Awaitable[None] | None]) -> None:
+        self._events.append(handler)
 
     def _build_app(self) -> web.Application:
         app = web.Application()
@@ -160,15 +164,14 @@ class FeatureRuntime:
         if not isinstance(event, self._event_types):
             return
 
-        if self._on_event is not None:
+        for event_handler in self._events:
             try:
-                result = self._on_event(event)
+                result = event_handler(event)
                 if asyncio.iscoroutine(result):
                     await result
             except Exception:
-                logger.exception("Feature %s: erreur dans on_event", self.name)
+                logger.exception("Feature %s: error in event handler", self.name)
 
         encoded = encapsulate(event)
-        # Distribution directe sans stockage
         for queue in self._sse_queues:
             await queue.put(encoded)

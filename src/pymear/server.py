@@ -18,17 +18,11 @@ from pymear.contracts.events import (
 from pymear.core.broadcaster import Broadcaster
 from pymear.core.event_bus import EventBus
 from pymear.core.event_exporter import EventExporter
+from pymear.core.proxy import FeatureProxy
 from pymear.utils.badge_resolver import BadgeResolver
 from pymear.utils.helix_client import get_user_id
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-
-load_dotenv()
-
-HUB_PORT = int(os.getenv("HUB_PORT", "8765"))
+logger = logging.getLogger(__name__)
 
 ALL_EVENT_TYPES = (
     ChatMessageEvent,
@@ -40,68 +34,149 @@ ALL_EVENT_TYPES = (
 )
 
 
-async def start_event_exporter(app: web.Application) -> None:
-    client_id = os.getenv("TWITCH_CLIENT_ID")
-    token = os.getenv("TWITCH_TOKEN")
-    channel = os.getenv("TWITCH_CHANNEL")
-    prefix = os.getenv("TWITCH_PREFIX", "!")
+class Pymear:
+    """
+    Point d'entrée unique du hub: expose le websocket du Broadcaster et démarre
+    le FeatureProxy qui unifie toutes les features sur un seul port.
 
-    if not client_id or not token or not channel:
-        print("Missing Twitch credentials: bot not started")
-        return
+    hub_port et proxy_port ont des valeurs par défaut sensées et sont injectables.
+    Les identifiants Twitch (client_id, token, channel) et le prefix n'ont pas de
+    valeur par défaut sûre: ils se règlent via propriétés, et à défaut sont
+    précédés depuis un .env au démarrage.
+    """
 
-    broadcaster_id = await get_user_id(client_id, token, channel)
+    def __init__(self, hub_port: int = 8765, proxy_port: int = 9000):
+        self.hub_port = hub_port
+        self.proxy_port = proxy_port
 
-    badge_resolver = BadgeResolver()
-    await badge_resolver.load(client_id, token, broadcaster_id)
+        self._client_id: str | None = None
+        self._token: str | None = None
+        self._channel: str | None = None
+        self._prefix: str | None = None
 
-    bus: EventBus = app["bus"]
-    exporter = EventExporter(
-        token=token,
-        client_id=client_id,
-        prefix=prefix,
-        channel=channel,
-        bus=bus,
-        badge_resolver=badge_resolver,
-    )
+        self.bus = EventBus()
+        self.broadcaster = Broadcaster()
+        self.broadcaster.subscribe_to(self.bus, *ALL_EVENT_TYPES)
+        self.proxy = FeatureProxy(port=self.proxy_port)
 
-    task = asyncio.create_task(exporter.start())
-    task.add_done_callback(_log_exporter_error)
-    app["event_exporter_task"] = task
-    app["event_exporter"] = exporter
+        self._event_exporter: EventExporter | None = None
+        self._event_exporter_task: asyncio.Task | None = None
 
+    @property
+    def client_id(self) -> str | None:
+        return self._client_id
 
-def _log_exporter_error(task: asyncio.Task) -> None:
-    if task.cancelled():
-        return
-    if exc := task.exception():
-        print(f"EventExporter error: {exc!r}")
+    @client_id.setter
+    def client_id(self, value: str) -> None:
+        self._client_id = value
 
+    @property
+    def token(self) -> str | None:
+        return self._token
 
-async def stop_event_exporter(app: web.Application) -> None:
-    task = app.get("event_exporter_task")
-    if task:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+    @token.setter
+    def token(self, value: str) -> None:
+        self._token = value
 
+    @property
+    def channel(self) -> str | None:
+        return self._channel
 
-def create_app() -> web.Application:
-    app = web.Application()
+    @channel.setter
+    def channel(self, value: str) -> None:
+        self._channel = value
 
-    bus = EventBus()
-    broadcaster = Broadcaster()
-    broadcaster.subscribe_to(bus, *ALL_EVENT_TYPES)
+    @property
+    def prefix(self) -> str | None:
+        return self._prefix
 
-    app["bus"] = bus
-    app["broadcaster"] = broadcaster
+    @prefix.setter
+    def prefix(self, value: str) -> None:
+        self._prefix = value
 
-    app.router.add_get("/ws", broadcaster.websocket_handler)
+    def _resolve_credentials(self) -> None:
+        load_dotenv()
 
-    app.on_startup.append(start_event_exporter)
-    app.on_cleanup.append(stop_event_exporter)
+        if self._client_id is None:
+            self._client_id = os.getenv("TWITCH_CLIENT_ID")
+            if self._client_id:
+                logger.info("client_id loaded from environment")
 
-    return app
+        if self._token is None:
+            self._token = os.getenv("TWITCH_TOKEN")
+            if self._token:
+                logger.info("token loaded from environment")
+
+        if self._channel is None:
+            self._channel = os.getenv("TWITCH_CHANNEL")
+            if self._channel:
+                logger.info("channel loaded from environment")
+
+        if self._prefix is None:
+            env_prefix = os.getenv("TWITCH_PREFIX")
+            self._prefix = env_prefix if env_prefix else "!"
+            logger.info(
+                "prefix set to '%s' (%s)",
+                self._prefix,
+                "environment" if env_prefix else "default",
+            )
+
+    def _build_hub_app(self) -> web.Application:
+        app = web.Application()
+        app.router.add_get("/ws", self.broadcaster.websocket_handler)
+        app.on_startup.append(self._start_event_exporter)
+        app.on_cleanup.append(self._stop_event_exporter)
+        return app
+
+    async def _start_event_exporter(self, app: web.Application) -> None:
+        if not self._client_id or not self._token or not self._channel:
+            logger.warning("Twitch credentials missing: bot not started")
+            return
+
+        broadcaster_id = await get_user_id(self._client_id, self._token, self._channel)
+        badge_resolver = BadgeResolver()
+        await badge_resolver.load(self._client_id, self._token, broadcaster_id)
+
+        self._event_exporter = EventExporter(
+            token=self._token,
+            client_id=self._client_id,
+            prefix=self._prefix if self._prefix else "!",
+            channel=self._channel,
+            bus=self.bus,
+            badge_resolver=badge_resolver,
+        )
+        task = asyncio.create_task(self._event_exporter.start())
+        task.add_done_callback(self._log_exporter_error)
+        self._event_exporter_task = task
+
+    @staticmethod
+    def _log_exporter_error(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        if exc := task.exception():
+            logger.error("EventExporter error: %r", exc)
+
+    async def _stop_event_exporter(self, app: web.Application) -> None:
+        if self._event_exporter_task:
+            self._event_exporter_task.cancel()
+            await asyncio.gather(self._event_exporter_task, return_exceptions=True)
+
+    async def run(self) -> None:
+        self._resolve_credentials()
+
+        app = self._build_hub_app()
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, port=self.hub_port)
+        await site.start()
+        logger.info("Hub: websocket on ws://localhost:%s/ws", self.hub_port)
+
+        await self.proxy.run()
 
 
 if __name__ == "__main__":
-    web.run_app(create_app(), port=HUB_PORT)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    asyncio.run(Pymear().run())

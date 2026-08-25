@@ -15,8 +15,10 @@ def main() -> None:
         name="chat",
         event_types=[ChatMessageEvent],
         static_dir=Path(__file__).parent,
-        on_event=log_message,
     )
+
+    runtime.add_handler(log_message)
+
     asyncio.run(runtime.run())
 
 
