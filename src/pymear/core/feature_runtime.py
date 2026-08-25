@@ -23,12 +23,20 @@ def _find_free_port() -> int:
         sock.bind(("", 0))
         return sock.getsockname()[1]
 
+class _Source(Generic[E]):
+    def __init__(self, name: str, transform: Callable[[E], dict | None]):
+        self.name = name
+        self.transform = transform
+        self.queues: set[asyncio.Queue[dict]] = set()
 
 class FeatureRuntime(Generic[E]):
     """
     Feature Foundation (WebSocket -> SSE):
-    - Common base for all features: connects to hub via WebSocket, filters relevant events,
-      buffers them, and restreams as SSE to served HTML/JS pages.
+    - Common base for all features: connects to hub via WebSocket and filters relevant events.
+    - add_handler registers a server-side reaction to an event, with no effect on any SSE stream.
+    - add_source registers a dedicated SSE stream at /events/<name>, whose transform both
+      filters (return None to skip) and shapes the payload sent to that stream's frontend.
+      Each source keeps its own set of connected SSE clients.
     - Also registers itself with the routing proxy (name + port) so it becomes reachable
       under http://localhost:<proxy_port>/<name>/ without needing a fixed port.
 
@@ -38,6 +46,7 @@ class FeatureRuntime(Generic[E]):
         event_types=[ChatMessageEvent],
         static_dir=Path(__file__).parent
     )
+    runtime.add_source("chat", lambda e: {"user": e.user, "text": e.text})
     asyncio.run(runtime.run())
     """
 
@@ -56,8 +65,8 @@ class FeatureRuntime(Generic[E]):
         self.port = port if port is not None else _find_free_port()
         self.hub_url = f"ws://localhost:{hub_port}/ws"
         self.proxy_url = f"ws://localhost:{proxy_port}/register"
-        self._sse_queues: set[asyncio.Queue[dict]] = set()
-        self._events: list[Callable[[E], Awaitable[None] | None]] = []
+        self._sources: dict[str, _Source[E]] = {}
+        self._handlers: list[Callable[[E], Awaitable[None] | None]] = []
 
     async def run(self) -> None:
         app = self._build_app()
@@ -71,11 +80,21 @@ class FeatureRuntime(Generic[E]):
 
 
     def add_handler(self, handler: Callable[[E], Awaitable[None] | None]) -> None:
-        self._events.append(handler)
+        """Server-side reaction to an event, does not affect any SSE stream."""
+        self._handlers.append(handler)
+
+    def add_source(self, name: str, transform: Callable[[E], dict | None]) -> None:
+        """
+        Registers a dedicated SSE stream at /events/<name>.
+        transform receives the typed event and returns the payload to send to the
+        frontend, or None to filter this event out of this specific stream.
+        """
+        self._sources[name] = _Source(name, transform)
 
     def _build_app(self) -> web.Application:
         app = web.Application()
-        app.router.add_get("/events", self._sse_handler)
+        for source_name in self._sources:
+            app.router.add_get(f"/events/{source_name}", self._make_sse_handler(source_name))
         app.router.add_get("/", self._index_handler)
         app.router.add_static("/", path=self.static_dir, show_index=False)
         return app
@@ -83,29 +102,35 @@ class FeatureRuntime(Generic[E]):
     async def _index_handler(self, request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.static_dir / "index.html")
 
-    async def _sse_handler(self, request: web.Request) -> web.StreamResponse:
-        response = web.StreamResponse(
-            headers={
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
-        )
-        await response.prepare(request)
+    def _make_sse_handler(
+        self, source_name: str
+    ) -> Callable[[web.Request], Awaitable[web.StreamResponse]]:
+        async def handler(request: web.Request) -> web.StreamResponse:
+            source = self._sources[source_name]
+            response = web.StreamResponse(
+                headers={
+                    "Content-Type": "text/event-stream",
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                }
+            )
+            await response.prepare(request)
 
-        queue: asyncio.Queue[dict] = asyncio.Queue()
-        self._sse_queues.add(queue)
+            queue: asyncio.Queue[dict] = asyncio.Queue()
+            source.queues.add(queue)
 
-        try:
-            while True:
-                payload = await queue.get()
-                await response.write(self._to_sse_frame(payload))
-        except (ConnectionResetError, asyncio.CancelledError):
-            pass
-        finally:
-            self._sse_queues.discard(queue)
+            try:
+                while True:
+                    payload = await queue.get()
+                    await response.write(self._to_sse_frame(payload))
+            except (ConnectionResetError, asyncio.CancelledError):
+                pass
+            finally:
+                source.queues.discard(queue)
 
-        return response
+            return response
+
+        return handler
 
     @staticmethod
     def _to_sse_frame(payload: dict) -> bytes:
@@ -164,14 +189,25 @@ class FeatureRuntime(Generic[E]):
         if not isinstance(event, self._event_types):
             return
 
-        for event_handler in self._events:
+        for handler in self._handlers:
             try:
-                result = event_handler(event)
+                result = handler(event)
                 if asyncio.iscoroutine(result):
                     await result
             except Exception:
-                logger.exception("Feature %s: error in event handler", self.name)
+                logger.exception("Feature %s: error in handler", self.name)
 
-        encoded = encapsulate(event)
-        for queue in self._sse_queues:
-            await queue.put(encoded)
+        for source in self._sources.values():
+            try:
+                filtered = source.transform(event)
+            except Exception:
+                logger.exception(
+                    "Feature %s: error in source '%s' transform", self.name, source.name
+                )
+                continue
+
+            if filtered is None:
+                continue
+
+            for queue in source.queues:
+                await queue.put(filtered)
