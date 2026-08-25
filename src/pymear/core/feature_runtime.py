@@ -120,7 +120,7 @@ class FeatureRuntime(Generic[E]):
                     yield ws
             except (aiohttp.ClientError, ConnectionRefusedError):
                 logger.warning(
-                    "Feature %s: %s injoignable, nouvel essai dans %ss",
+                    "Feature %s: %s unreachable, new try in %ss",
                     self.name,
                     label,
                     delay,
@@ -138,7 +138,7 @@ class FeatureRuntime(Generic[E]):
                         await self._handle_hub_message(msg.data)
                 except ConnectionResetError:
                     logger.warning(
-                        "Feature %s: connexion hub perdue, reconnexion...", self.name
+                        "Feature %s: lost connection to hub, reconnecting...", self.name
                     )
 
     async def _register_with_proxy(self) -> None:
@@ -151,7 +151,7 @@ class FeatureRuntime(Generic[E]):
                             break
                 except ConnectionResetError:
                     logger.warning(
-                        "Feature %s: connexion proxy perdue, reconnexion...", self.name
+                        "Feature %s: lost connection to proxy, reconnecting...", self.name
                     )
 
     async def _handle_hub_message(self, raw: str) -> None:
