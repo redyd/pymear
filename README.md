@@ -107,7 +107,7 @@ from pathlib import Path
 from pymear.contracts.events import ChatMessageEvent
 from pymear.core.feature_runtime import FeatureRuntime
 
-runtime = FeatureRuntime[ChatMessageEvent](
+runtime = FeatureRuntime(
     name="chat",
     event_types=[ChatMessageEvent],
     static_dir=Path(__file__).parent,
