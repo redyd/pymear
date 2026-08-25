@@ -7,6 +7,7 @@ from typing import ClassVar
 
 @dataclass(frozen=True)
 class Event:
+    type: ClassVar[str]
     timestamp: float = field(default_factory=time.time)
 
 
