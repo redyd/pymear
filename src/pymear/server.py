@@ -36,13 +36,11 @@ ALL_EVENT_TYPES = (
 
 class Pymear:
     """
-    Point d'entrée unique du hub: expose le websocket du Broadcaster et démarre
-    le FeatureProxy qui unifie toutes les features sur un seul port.
+    Hub Entry Point:
 
-    hub_port et proxy_port ont des valeurs par défaut sensées et sont injectables.
-    Les identifiants Twitch (client_id, token, channel) et le prefix n'ont pas de
-    valeur par défaut sûre: ils se règlent via propriétés, et à défaut sont
-    précédés depuis un .env au démarrage.
+    - Single entry point: exposes Broadcaster's WebSocket and starts FeatureProxy to unify all features on one port.
+    - hub_port & proxy_port: sensible defaults, injectable.
+    - Twitch credentials (client_id, token, channel) + prefix: no safe defaults—set via properties or fall back to .env at startup.
     """
 
     def __init__(self, hub_port: int = 8765, proxy_port: int = 9000):

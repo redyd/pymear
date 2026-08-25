@@ -100,7 +100,10 @@ class FeatureProxy:
                 status=upstream.status, headers=response_headers
             )
             await response.prepare(request)
-            async for chunk in upstream.content.iter_any():
-                await response.write(chunk)
+            try:
+                async for chunk in upstream.content.iter_any():
+                    await response.write(chunk)
+            except (ConnectionResetError, aiohttp.ClientConnectionResetError):
+                pass
 
         return response
