@@ -1,4 +1,7 @@
+import logging
 from typing import cast
+
+logger = logging.getLogger(__name__)
 
 import pyttsx3
 
@@ -26,5 +29,5 @@ class TextToSpeech:
 
     def say(self, text):
         self.engine.say(text)
-        print(f"[TTS]: Saying {len(text.split(' '))} words.")
+        logger.info("[TTS]: Saying %s words.", len(text.split(' ')))
         self.engine.runAndWait()

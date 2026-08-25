@@ -65,7 +65,7 @@ class FeatureRuntime(Generic[E]):
         await runner.setup()
         site = web.TCPSite(runner, port=self.port)
         await site.start()
-        print(f"Feature '{self.name}': UI served on http://localhost:{self.port}")
+        logger.info("Feature '%s': UI served on http://localhost:%s", self.name, self.port)
 
         await asyncio.gather(self._listen_hub(), self._register_with_proxy())
 

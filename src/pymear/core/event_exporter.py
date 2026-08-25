@@ -1,9 +1,12 @@
+import logging
+
 from twitchio.chatter import Chatter
 from twitchio.ext import commands
 
 from pymear.contracts.events import *
 from pymear.utils.badge_resolver import BadgeResolver
 
+logger = logging.getLogger(__name__)
 
 class EventExporter(commands.Bot):
     """The exporter bot that listens to Twitch events and publishes them to the bus."""
@@ -28,7 +31,7 @@ class EventExporter(commands.Bot):
         self.badge_resolver = badge_resolver
 
     async def event_ready(self):
-        print(f"Bot logged in as {self.nick}, channels: {self.connected_channels}")
+        logger.info("Bot logged in as %s, channels: %s", self.nick, self.connected_channels)
 
     async def event_message(self, message):
         if message.echo:

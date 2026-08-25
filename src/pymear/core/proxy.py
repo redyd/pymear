@@ -35,7 +35,7 @@ class FeatureProxy:
         await runner.setup()
         site = web.TCPSite(runner, port=self.port)
         await site.start()
-        print(f"Proxy: routage sur http://localhost:{self.port}")
+        logger.info("Proxy: routing on http://localhost:%s", self.port)
 
         await asyncio.Event().wait()
 
