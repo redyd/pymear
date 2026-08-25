@@ -25,6 +25,11 @@ from pymear.utils.helix_client import get_user_id
 
 logger = logging.getLogger(__name__)
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
 ALL_EVENT_TYPES = (
     ChatMessageEvent,
     FollowEvent,
@@ -175,8 +180,4 @@ class Pymear:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
     asyncio.run(Pymear().run())
