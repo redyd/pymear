@@ -17,6 +17,7 @@ class ChatMessageEvent(Event):
     text: str = ""
     color: str = ""
     badges: list[str] = field(default_factory=list)
+    message_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,3 +56,10 @@ class RaidEvent(Event):
     type: ClassVar[str] = "raid"
     raider: str = ""
     viewer_count: int = 0
+
+
+@dataclass(frozen=True)
+class DeletedMessageEvent(Event):
+    type: ClassVar[str] = "deleted_message"
+    user: str = ""
+    message_id: str = ""

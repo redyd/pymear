@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from pymear.contracts.events import (
     ChatMessageEvent,
     CheerEvent,
+    DeletedMessageEvent,
     FollowEvent,
     GiftSubscriptionEvent,
     RaidEvent,
@@ -31,6 +32,7 @@ ALL_EVENT_TYPES = (
     GiftSubscriptionEvent,
     CheerEvent,
     RaidEvent,
+    DeletedMessageEvent,
 )
 
 

@@ -12,7 +12,7 @@ import aiohttp
 from aiohttp import web
 
 from pymear.contracts.events import Event
-from pymear.contracts.events_mapper import decapsulate, encapsulate
+from pymear.contracts.events_mapper import decapsulate
 
 E = TypeVar("E", bound=Event)
 logger = logging.getLogger(__name__)

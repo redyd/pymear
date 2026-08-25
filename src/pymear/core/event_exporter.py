@@ -1,10 +1,13 @@
 import logging
+import re
 
 from twitchio.chatter import Chatter
 from twitchio.ext import commands
 
 from pymear.contracts.events import *
 from pymear.utils.badge_resolver import BadgeResolver
+
+_CLEARMSG_RE = re.compile(r"^@(?P<tags>\S+) :tmi\.twitch\.tv CLEARMSG #\S+ :(?P<text>.*)$")
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,7 @@ class EventExporter(commands.Bot):
                 text=message.content or "",
                 color=color,
                 badges=badges,
+                message_id=message.id
             )
         )
         await self.handle_commands(message)
@@ -87,3 +91,19 @@ class EventExporter(commands.Bot):
         raider = tags.get("msg-param-displayName") or tags.get("login") or "Unknown"
         viewer_count = int(tags.get("msg-param-viewerCount") or 0)
         await self.bus.publish(RaidEvent(raider=raider, viewer_count=viewer_count))
+
+    async def event_raw_data(self, data: str) -> None:
+        if "CLEARMSG" not in data:
+            return
+
+        match = _CLEARMSG_RE.match(data)
+        if not match:
+            return
+
+        tags = dict(
+            pair.split("=", 1) for pair in match.group("tags").split(";") if "=" in pair
+        )
+        user = tags.get("login", "Unknown")
+        message_id = tags.get("target-msg-id", "")
+
+        await self.bus.publish(DeletedMessageEvent(user=user, message_id=message_id))
