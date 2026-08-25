@@ -66,7 +66,6 @@ class FeatureRuntime(Generic[E]):
         self.hub_url = f"ws://localhost:{hub_port}/ws"
         self.proxy_url = f"ws://localhost:{proxy_port}/register"
         self._sources: dict[str, _Source[E]] = {}
-        self._handlers: list[Callable[[E], Awaitable[None] | None]] = []
 
     async def run(self) -> None:
         app = self._build_app()
@@ -78,10 +77,13 @@ class FeatureRuntime(Generic[E]):
 
         await asyncio.gather(self._listen_hub(), self._register_with_proxy())
 
-
-    def add_handler(self, handler: Callable[[E], Awaitable[None] | None]) -> None:
-        """Server-side reaction to an event, does not affect any SSE stream."""
-        self._handlers.append(handler)
+    async def send(self, source_name: str, payload: dict) -> None:
+        source = self._sources.get(source_name)
+        if source is None:
+            logger.warning("Feature %s: source '%s' unknown", self.name, source_name)
+            return
+        for queue in source.queues:
+            await queue.put(payload)
 
     def add_source(self, name: str, transform: Callable[[E], dict | None]) -> None:
         """
@@ -188,14 +190,6 @@ class FeatureRuntime(Generic[E]):
 
         if not isinstance(event, self._event_types):
             return
-
-        for handler in self._handlers:
-            try:
-                result = handler(event)
-                if asyncio.iscoroutine(result):
-                    await result
-            except Exception:
-                logger.exception("Feature %s: error in handler", self.name)
 
         for source in self._sources.values():
             try:
