@@ -1,5 +1,7 @@
 import asyncio
 
+from .client.command import Command
+from .client.feature import Feature
 from .contracts.events import (
     ChatMessageEvent,
     CheerEvent,
@@ -11,25 +13,23 @@ from .contracts.events import (
     SubscriptionEvent,
 )
 from .core.broadcaster import Broadcaster
-from .core.event_bus import InternalBus
 from .core.event_exporter import EventExporter
-from .core.feature_runtime import FeatureRuntime
+from .core.internal_bus import InternalBus
 from .server import Pymear
-from .utils.badge_resolver import BadgeResolver
 from .utils.speaker import TextToSpeech
 
 __all__ = [
-    "BadgeResolver",
     "Broadcaster",
     "ChatMessageEvent",
     "CheerEvent",
+    "Command",
     "DeletedMessageEvent",
     "Event",
-    "InternalBus",
     "EventExporter",
-    "FeatureRuntime",
+    "Feature",
     "FollowEvent",
     "GiftSubscriptionEvent",
+    "InternalBus",
     "Pymear",
     "RaidEvent",
     "SubscriptionEvent",

@@ -17,6 +17,7 @@ from pymear.contracts.events import (
     SubscriptionEvent,
 )
 from pymear.core.broadcaster import Broadcaster
+from pymear.core.command_router import CommandRouter
 from pymear.core.event_exporter import EventExporter
 from pymear.core.internal_bus import InternalBus
 from pymear.core.twitch_bot import TwitchBot
@@ -67,6 +68,7 @@ class Pymear:
         self._interactor: Interactor | None = None
         self._bot: TwitchBot | None = None
         self._event_exporter: EventExporter | None = None
+        self._command_router: CommandRouter | None = None
 
         self._event_bot: asyncio.Task | None = None
 
@@ -131,9 +133,11 @@ class Pymear:
 
     def _build_hub_app(self) -> web.Application:
         app = web.Application()
+
         app.router.add_get("/ws", self.broadcaster.websocket_handler)
         app.on_startup.append(self._start_event_exporter)
         app.on_cleanup.append(self._stop_event_exporter)
+
         return app
 
     async def _start_event_exporter(self, app: web.Application) -> None:
@@ -153,6 +157,11 @@ class Pymear:
             interactor=self._interactor,
             bus=self.bus,
         )
+
+        if self._interactor:
+            self._command_router = CommandRouter(self._interactor, app)
+        else:
+            logger.warning("no interactor: command router not registered")
 
         task = asyncio.create_task(self._bot.start())
         task.add_done_callback(self._log_exporter_error)

@@ -29,7 +29,7 @@ class _Source(Generic[E]):
         self.transform = transform
         self.queues: set[asyncio.Queue[dict]] = set()
 
-class FeatureRuntime(Generic[E]):
+class Feature(Generic[E]):
     """
     Feature Foundation (WebSocket -> SSE):
     - Common base for all features: connects to hub via WebSocket and filters relevant events.

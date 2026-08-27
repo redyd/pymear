@@ -57,11 +57,9 @@ class Broadcaster:
                         payload = json.loads(msg.data)
                     except json.JSONDecodeError:
                         logger.warning(
-                            "Message websocket invalide ignoré: %r", msg.data
+                            "Invalid message: %r", msg.data
                         )
                         continue
-                    # TODO: router vers la classe de commandes plutôt que
-                    # rediffuser tel quel, une fois qu'elle existe.
                     await self.send(payload, exclude=ws)
                 elif msg.type == web.WSMsgType.ERROR:
                     break
