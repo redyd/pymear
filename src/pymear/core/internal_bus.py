@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 Handler = Callable[[Event], Awaitable[None]]
 
 
-class EventBus:
+class InternalBus:
     """
     Internal In-Process Event Bus (Dataclass-Typed):
     - subscribe(): Registers handler for exact event type only (no subclass inheritance).

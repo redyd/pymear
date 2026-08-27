@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Self
 
 import aiohttp
 
 HELIX_URL = "https://api.twitch.tv/helix"
+logger = logging.getLogger(__name__)
 
 
 def _clean_token(token: str) -> str:
@@ -41,6 +43,8 @@ class Interactor:
 
         await instance.load_user_id(login)
         await instance.load_badges()
+
+        logger.info(f"Interactor created for user {login}")
 
         return instance
 

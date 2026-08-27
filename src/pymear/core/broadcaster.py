@@ -7,7 +7,7 @@ from aiohttp import web
 
 from pymear.contracts.events import Event
 from pymear.contracts.events_mapper import encapsulate
-from pymear.core.event_bus import EventBus
+from pymear.core.internal_bus import InternalBus
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class Broadcaster:
     def __init__(self):
         self._clients: set[web.WebSocketResponse] = set()
 
-    def subscribe_to(self, bus: EventBus, *event_types: type[Event]) -> None:
+    def subscribe_to(self, bus: InternalBus, *event_types: type[Event]) -> None:
         for event_type in event_types:
             bus.subscribe(event_type, self._relay)
 

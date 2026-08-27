@@ -4,7 +4,7 @@ import re
 from twitchio.chatter import Chatter
 
 from pymear.contracts.events import *
-from pymear.core.event_bus import EventBus
+from pymear.core.internal_bus import InternalBus
 from pymear.core.twitch_bot import TwitchBot
 from pymear.http.interactor import Interactor
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class EventExporter:
     """Listens to the raw Twitch events forwarded by TwitchBot and publishes typed events on the bus."""
 
-    def __init__(self, bot: TwitchBot, bus: EventBus, interactor: Interactor):
+    def __init__(self, bot: TwitchBot, bus: InternalBus, interactor: Interactor):
         self.bus = bus
         self.interactor = interactor
         bot.add_listener(self._on_event)

@@ -17,8 +17,10 @@ from pymear.contracts.events import (
     SubscriptionEvent,
 )
 from pymear.core.broadcaster import Broadcaster
-from pymear.core.event_bus import EventBus
 from pymear.core.event_exporter import EventExporter
+from pymear.core.internal_bus import InternalBus
+from pymear.core.twitch_bot import TwitchBot
+from pymear.http.interactor import Interactor
 from pymear.http.proxy import FeatureProxy
 
 logger = logging.getLogger(__name__)
@@ -57,13 +59,16 @@ class Pymear:
         self._channel: str | None = None
         self._prefix: str | None = None
 
-        self.bus = EventBus()
+        self.bus = InternalBus()
         self.broadcaster = Broadcaster()
         self.broadcaster.subscribe_to(self.bus, *ALL_EVENT_TYPES)
         self.proxy = FeatureProxy(port=self.proxy_port)
 
+        self._interactor: Interactor | None = None
+        self._bot: TwitchBot | None = None
         self._event_exporter: EventExporter | None = None
-        self._event_exporter_task: asyncio.Task | None = None
+
+        self._event_bot: asyncio.Task | None = None
 
     @property
     def client_id(self) -> str | None:
@@ -136,21 +141,23 @@ class Pymear:
             logger.warning("Twitch credentials missing: bot not started")
             return
 
-        broadcaster_id = await get_user_id(self._client_id, self._token, self._channel)
-        badge_resolver = BadgeResolver()
-        await badge_resolver.load(self._client_id, self._token, broadcaster_id)
-
-        self._event_exporter = EventExporter(
+        self._interactor = await Interactor.create(self._client_id, self._token, self._channel)
+        self._bot = TwitchBot(
             token=self._token,
             client_id=self._client_id,
             prefix=self._prefix if self._prefix else "!",
-            channel=self._channel,
-            bus=self.bus,
-            interactor=badge_resolver,
+            channel=self._channel
         )
-        task = asyncio.create_task(self._event_exporter.start())
+        self._event_exporter = EventExporter(
+            bot=self._bot,
+            interactor=self._interactor,
+            bus=self.bus,
+        )
+
+        task = asyncio.create_task(self._bot.start())
         task.add_done_callback(self._log_exporter_error)
-        self._event_exporter_task = task
+
+        self._event_bot = task
 
     @staticmethod
     def _log_exporter_error(task: asyncio.Task) -> None:
@@ -160,9 +167,9 @@ class Pymear:
             logger.error("EventExporter error: %r", exc)
 
     async def _stop_event_exporter(self, app: web.Application) -> None:
-        if self._event_exporter_task:
-            self._event_exporter_task.cancel()
-            await asyncio.gather(self._event_exporter_task, return_exceptions=True)
+        if self._event_bot:
+            self._event_bot.cancel()
+            await asyncio.gather(self._event_bot, return_exceptions=True)
 
     async def run(self) -> None:
         self._resolve_credentials()

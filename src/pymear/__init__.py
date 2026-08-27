@@ -11,7 +11,7 @@ from .contracts.events import (
     SubscriptionEvent,
 )
 from .core.broadcaster import Broadcaster
-from .core.event_bus import EventBus
+from .core.event_bus import InternalBus
 from .core.event_exporter import EventExporter
 from .core.feature_runtime import FeatureRuntime
 from .server import Pymear
@@ -25,7 +25,7 @@ __all__ = [
     "CheerEvent",
     "DeletedMessageEvent",
     "Event",
-    "EventBus",
+    "InternalBus",
     "EventExporter",
     "FeatureRuntime",
     "FollowEvent",
