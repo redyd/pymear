@@ -19,9 +19,7 @@ from pymear.contracts.events import (
 from pymear.core.broadcaster import Broadcaster
 from pymear.core.event_bus import EventBus
 from pymear.core.event_exporter import EventExporter
-from pymear.core.proxy import FeatureProxy
-from pymear.utils.badge_resolver import BadgeResolver
-from pymear.utils.helix_client import get_user_id
+from pymear.http.proxy import FeatureProxy
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +146,7 @@ class Pymear:
             prefix=self._prefix if self._prefix else "!",
             channel=self._channel,
             bus=self.bus,
-            badge_resolver=badge_resolver,
+            interactor=badge_resolver,
         )
         task = asyncio.create_task(self._event_exporter.start())
         task.add_done_callback(self._log_exporter_error)
