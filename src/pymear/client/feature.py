@@ -23,31 +23,45 @@ def _find_free_port() -> int:
         sock.bind(("", 0))
         return sock.getsockname()[1]
 
+
 class _Source(Generic[E]):
-    def __init__(self, name: str, transform: Callable[[E], dict | None]):
+    def __init__(
+        self,
+        name: str,
+        transform: Callable[[E], dict | None] | None,
+        on_message: Callable[[dict], Awaitable[None]] | None,
+    ):
         self.name = name
         self.transform = transform
+        self.on_message = on_message
         self.queues: set[asyncio.Queue[dict]] = set()
+
 
 class Feature(Generic[E]):
     """
-    Feature Foundation (WebSocket -> SSE):
+    Feature Foundation (WebSocket hub -> WebSocket clients):
     - Common base for all features: connects to hub via WebSocket and filters relevant events.
-    - add_handler registers a server-side reaction to an event, with no effect on any SSE stream.
-    - add_source registers a dedicated SSE stream at /events/<name>, whose transform both
-      filters (return None to skip) and shapes the payload sent to that stream's frontend.
-      Each source keeps its own set of connected SSE clients.
+    - add_source registers a dedicated WebSocket endpoint at /ws/<name>, with two optional callbacks:
+        - transform: receives a typed hub event and returns the payload to push to connected
+          clients, or None to filter this event out of this specific stream.
+        - on_message: receives a parsed dict when a frontend client sends a message on this channel.
+      A source with only on_message (no transform) acts as a receive-only channel.
+      A source with only transform (no on_message) acts as a push-only channel.
     - Also registers itself with the routing proxy (name + port) so it becomes reachable
       under http://localhost:<proxy_port>/<name>/ without needing a fixed port.
 
     Usage:
-    runtime = FeatureRuntime(
+    feature = Feature(
         name="chat",
         event_types=[ChatMessageEvent],
         static_dir=Path(__file__).parent
     )
-    runtime.add_source("chat", lambda e: {"user": e.user, "text": e.text})
-    asyncio.run(runtime.run())
+    feature.add_source(
+        "chat",
+        transform=lambda e: {"user": e.user, "text": e.text},
+        on_message=lambda payload: handle_incoming(payload),
+    )
+    asyncio.run(feature.run())
     """
 
     def __init__(
@@ -63,7 +77,7 @@ class Feature(Generic[E]):
         self._event_types = tuple(event_types)
         self.static_dir = static_dir
         self.port = port if port is not None else _find_free_port()
-        self.hub_url = f"ws://localhost:{hub_port}/ws"
+        self.hub_url = f"ws://localhost:{hub_port}/internal/ws"
         self.proxy_url = f"ws://localhost:{proxy_port}/register"
         self._sources: dict[str, _Source[E]] = {}
 
@@ -85,18 +99,26 @@ class Feature(Generic[E]):
         for queue in source.queues:
             await queue.put(payload)
 
-    def add_source(self, name: str, transform: Callable[[E], dict | None]) -> None:
+    def add_source(
+        self,
+        name: str,
+        transform: Callable[[E], dict | None] | None = None,
+        on_message: Callable[[dict], Awaitable[None]] | None = None,
+    ) -> None:
         """
-        Registers a dedicated SSE stream at /events/<name>.
-        transform receives the typed event and returns the payload to send to the
-        frontend, or None to filter this event out of this specific stream.
+        Registers a dedicated WebSocket endpoint at /ws/<name>.
+        transform receives a typed hub event and returns the payload to push to connected
+        clients, or None to filter this event out of this specific stream. If None, no data
+        is pushed from the hub to clients on this source.
+        on_message is called with the parsed payload when a client sends a message on this
+        channel. If None, incoming client messages are silently ignored.
         """
-        self._sources[name] = _Source(name, transform)
+        self._sources[name] = _Source(name, transform, on_message)
 
     def _build_app(self) -> web.Application:
         app = web.Application()
         for source_name in self._sources:
-            app.router.add_get(f"/events/{source_name}", self._make_sse_handler(source_name))
+            app.router.add_get(f"/ws/{source_name}", self._make_ws_handler(source_name))
         app.router.add_get("/", self._index_handler)
         app.router.add_static("/", path=self.static_dir, show_index=False)
         return app
@@ -104,39 +126,56 @@ class Feature(Generic[E]):
     async def _index_handler(self, request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.static_dir / "index.html")
 
-    def _make_sse_handler(
+    def _make_ws_handler(
         self, source_name: str
-    ) -> Callable[[web.Request], Awaitable[web.StreamResponse]]:
-        async def handler(request: web.Request) -> web.StreamResponse:
+    ) -> Callable[[web.Request], Awaitable[web.WebSocketResponse]]:
+        async def handler(request: web.Request) -> web.WebSocketResponse:
             source = self._sources[source_name]
-            response = web.StreamResponse(
-                headers={
-                    "Content-Type": "text/event-stream",
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                }
-            )
-            await response.prepare(request)
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
 
             queue: asyncio.Queue[dict] = asyncio.Queue()
             source.queues.add(queue)
 
-            try:
+            async def sender() -> None:
                 while True:
                     payload = await queue.get()
-                    await response.write(self._to_sse_frame(payload))
-            except (ConnectionResetError, asyncio.CancelledError):
-                pass
+                    try:
+                        await ws.send_str(json.dumps(payload))
+                    except ConnectionResetError:
+                        break
+
+            sender_task = asyncio.create_task(sender())
+            try:
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        if source.on_message is not None:
+                            try:
+                                payload = json.loads(msg.data)
+                            except json.JSONDecodeError:
+                                logger.warning(
+                                    "Feature %s: invalid JSON on source '%s'",
+                                    self.name,
+                                    source_name,
+                                )
+                                continue
+                            try:
+                                await source.on_message(payload)
+                            except Exception:
+                                logger.exception(
+                                    "Feature %s: error in source '%s' on_message",
+                                    self.name,
+                                    source_name,
+                                )
+                    elif msg.type == aiohttp.WSMsgType.ERROR:
+                        break
             finally:
+                sender_task.cancel()
                 source.queues.discard(queue)
 
-            return response
+            return ws
 
         return handler
-
-    @staticmethod
-    def _to_sse_frame(payload: dict) -> bytes:
-        return f"data: {json.dumps(payload)}\n\n".encode()
 
     async def _connect_with_retry(self, session: aiohttp.ClientSession, url: str, label: str):
         delay = 1
@@ -192,6 +231,9 @@ class Feature(Generic[E]):
             return
 
         for source in self._sources.values():
+            if source.transform is None:
+                continue
+
             try:
                 filtered = source.transform(event)
             except Exception:

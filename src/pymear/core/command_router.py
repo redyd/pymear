@@ -4,7 +4,6 @@ import inspect
 import logging
 
 from aiohttp import web
-from twitchio.websocket import log
 
 from pymear.http.interactor import Interactor
 

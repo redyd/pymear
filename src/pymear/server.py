@@ -30,6 +30,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
 
 ALL_EVENT_TYPES = (
     ChatMessageEvent,
@@ -134,7 +135,7 @@ class Pymear:
     def _build_hub_app(self) -> web.Application:
         app = web.Application()
 
-        app.router.add_get("/ws", self.broadcaster.websocket_handler)
+        app.router.add_get("/internal/ws", self.broadcaster.websocket_handler)
         app.on_startup.append(self._start_event_exporter)
         app.on_cleanup.append(self._stop_event_exporter)
 
@@ -188,7 +189,7 @@ class Pymear:
         await runner.setup()
         site = web.TCPSite(runner, port=self.hub_port)
         await site.start()
-        logger.info("Hub: websocket on ws://localhost:%s/ws", self.hub_port)
+        logger.info("Hub: websocket on ws://localhost:%s/internal/ws", self.hub_port)
 
         await self.proxy.run()
 
