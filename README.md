@@ -1,65 +1,128 @@
-# pymear
+# Pymear
 
-A lightweight Python framework for building live Twitch overlays and integrations. A single hub connects to Twitch (chat, follows, subs, gifted subs, cheers, raids) and re-broadcasts every event over a websocket. Independent "features" (separate Python processes) subscribe to that stream and expose their own small web UI, meant to be added as a browser source in OBS. A routing proxy unifies every feature under a single port, so OBS only ever needs to know one address per feature path.
+A lightweight framework for building Twitch overlays, integrations and actions quickly, through a local central server that connects to the stream, listens to events, and executes the actions you define.
 
-Repository: https://github.com/redyd/pymear
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## Architecture
+## Table of contents
 
-- **EventExporter** (`pymear.core.event_exporter`): the Twitch bot (built on `twitchio`). Connects to chat, listens to Twitch events, and publishes typed events onto the internal event bus. Runs once, as a long-lived singleton for the whole session.
-- **EventBus** (`pymear.core.event_bus`): an in-process, in-memory pub/sub bus. Handlers subscribe to an exact event dataclass type; publishing dispatches to each handler in its own task, so a slow or failing handler never blocks the others.
-- **Broadcaster** (`pymear.core.broadcaster`): subscribes to the EventBus and relays every event to connected websocket clients over a single `/ws` endpoint. This is the only bridge between the hub process and the outside world (other processes, browsers).
-- **FeatureProxy** (`pymear.core.proxy`): a separate process that unifies all features on a single port. Each feature registers itself over websocket (`/register`) with its name and current port; the proxy then reverse proxies any request under `/<name>/...` to that feature's own local server, SSE streams included.
-- **Pymear** (`pymear.server`): the hub's entry point, packaged as a class. Owns the `EventBus`, the `Broadcaster`, the `EventExporter` startup/shutdown, and the `FeatureProxy`. Twitch credentials and the command prefix are set via properties rather than the constructor; if left unset, they're resolved from a `.env` file at startup, and the source (environment vs default) is logged.
-- **contracts** (`pymear.contracts`): the typed event dataclasses (`ChatMessageEvent`, `FollowEvent`, `SubscriptionEvent`, `GiftSubscriptionEvent`, `CheerEvent`, `RaidEvent`) plus `encapsulate`/`decapsulate` mappers to convert them to and from JSON for the websocket wire format.
-- **FeatureRuntime** (`pymear.core.feature_runtime`): the helper every feature is built on. It connects to the hub as a websocket client, filters events by the type(s) the feature cares about, and registers itself with the `FeatureProxy` so it becomes reachable at `/<name>/` without needing a fixed port. Two distinct ways to react to events:
-  - `add_handler(fn)`: a server side reaction to an event (logging, TTS, etc.), with no effect on any SSE stream.
-  - `add_source(name, transform)`: opens a dedicated SSE stream at `/events/<name>`. `transform` receives the typed event and returns the payload to send to that stream, or `None` to filter the event out of it. A single feature can expose several independent sources (e.g. `chat` and `subscriptions` on the same process), each with its own set of connected browser clients.
-- **utils** (`pymear.utils`): small Helix API helpers: `BadgeResolver` (resolves chat badges to image URLs once at startup) and `get_user_id` (looks up a broadcaster's user id).
+- [Overview](#overview)
+- [How it works](#how-it-works)
+- [Creating a feature](#creating-a-feature)
+- [Interacting with the Twitch API](#interacting-with-the-twitch-api)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Advanced usage](#advanced-usage)
+- [License](#license)
 
-Each feature is its own OS process with its own port, picked automatically from the OS's ephemeral range unless you request a specific one. This means you can start, stop, or edit a single feature live without touching the hub, the proxy, or any other feature. The ephemeral port stays an internal detail: from the outside, every feature is reached through the proxy's single port.
+## Overview
 
-Twitch --(IRC/Helix)--> EventExporter --(publish)--> EventBus --(subscribe)--> Broadcaster --(websocket /ws)--> FeatureRuntime (per feature process)
-|
-(register: name+port)
-v
-FeatureProxy --(SSE via /<name>/events/<source>)--> browser / OBS
+Pymear's client side lets you connect directly to websockets exposed by the central server, such as listening to messages or subscriptions, but it also lets you define your own websocket flows and react to them for maximum control.
+
+The core idea of the project is to let you create, modify or stop any flow or integration currently running, without impacting the rest of your features, since each one runs as its own separate process.
+
+## How it works
+
+Each new flow or integration you want to add to your project should be organized as:
+
+- a Python file
+- an `index.html` file (and optionally a css/js file)
+
+In your Python file, you create a `Feature` object with a name (used to register it with the proxy under `http://localhost:<port>/<name>`), a list of event types to listen to, and the path to the folder containing your `index.html` and optional css/js files (usually `Path(__file__).parent`).
+
+You can then attach a data source, which registers itself with the proxy under `http://localhost:<port>/ws/<source_name>`, and pass it two optional methods: `on_message` and `transform`.
+
+## Creating a feature
+
+A simple chat feature can look like this:
+
+```python
+# main.py
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import asdict
+from pathlib import Path
+
+from pymear import ChatMessageEvent, DeletedMessageEvent, Feature
 
 
-## Installing pymear in your own project
+def handling(event: ChatMessageEvent | DeletedMessageEvent) -> dict | None:
+    if isinstance(event, DeletedMessageEvent):
+        return {"kind": "delete", "message_id": event.message_id}
+    return {"kind": "message", **asdict(event)}
 
-Requires Python 3.11+.
+
+def main() -> None:
+    feature = Feature(
+        name="chat",
+        event_types=[ChatMessageEvent, DeletedMessageEvent]
+    )
+    feature.add_source("chat_ws", transform=handling)
+    feature.start()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+On the front end, subscribe to the `ws/chat_ws` websocket:
+
+```javascript
+// script.js
+const chat = document.getElementById("chat");
+const MAX_MESSAGES = 50;
+const source = new WebSocket("ws/chat_ws");
+
+source.onmessage = (rawEvent) => {
+    const event = JSON.parse(rawEvent.data);
+    if (event.kind === "delete") {
+        removeMessage(event.message_id);
+    } else {
+        appendMessage(event);
+    }
+};
+```
+
+## Interacting with the Twitch API
+
+You can also interact directly with Twitch through the `Command` class, which lets you make requests to the Twitch API directly.
+
+## Installation
 
 ```bash
 pip install git+https://github.com/redyd/pymear.git
 ```
 
-This makes `pymear` importable from anywhere in your project's virtual environment. Your project doesn't need any particular folder layout; a flat `main.py` at the root next to a `features/` folder works just as well as anything nested under `src/`. pymear only cares about being importable, it has no expectation about where your own code lives.
+## Quick start
 
-Create a `.env` file in your project if you want Twitch credentials picked up automatically:
+Place a `.env` file at the root of the project and define the required environment variables:
 
-TWITCH_CLIENT_ID=your_client_id
-TWITCH_TOKEN=your_oauth_token
-TWITCH_CHANNEL=your_channel_login
+```env
+TWITCH_TOKEN=oauth:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWITCH_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWITCH_CHANNEL=your_twitch_channel
 TWITCH_PREFIX=!
 HUB_PORT=8765
-
-
-These are fallbacks only: any credential you set explicitly in code takes priority over the `.env` value.
-
-## Quickstart
-
-The fastest way to start the hub, using `.env` fallbacks or explicit credentials:
-
-```python
-import pymear
-
-pymear.run(client_id="...", token="...", channel="...")
 ```
 
-If you need more control (custom ports, inspecting the bus, running inside an already active event loop), instantiate `Pymear` directly instead:
+Then define your entry point:
 
 ```python
+# main.py
+import pymear
+
+pymear.run()
+```
+
+## Advanced usage
+
+If you need more control, instantiate the object directly:
+
+```python
+# main.py
 import asyncio
 from pymear import Pymear
 
@@ -67,78 +130,9 @@ app = Pymear(hub_port=8765, proxy_port=9000)
 app.client_id = "..."
 app.token = "..."
 app.channel = "..."
-
 asyncio.run(app.run())
 ```
 
-Either way, this starts the aiohttp app exposing the websocket relay on `ws://localhost:<hub_port>/ws`, connects the Twitch bot, loads the badge resolver, and starts the `FeatureProxy` on `<proxy_port>`. Start this before any feature; a feature will retry the connection with backoff if the hub or the proxy isn't up yet.
+## License
 
-## Example project layout
-
-A project using pymear typically looks like this. Nothing here is enforced by the library itself, it's just a convention that keeps features isolated from each other:
-
-your-project/
-├── .env
-├── main.py # calls pymear.run() or instantiates Pymear
-└── features/
-└── chat/
-├── main.py
-├── index.html
-├── script.js
-└── style.css
-
-
-## Running a feature
-
-```bash
-cd features/chat
-python main.py
-```
-
-The feature connects to the hub, registers itself with the proxy, and opens its own local web server on an automatically chosen free port (logged on startup). It's reachable through the proxy at `http://localhost:<proxy_port>/<name>/`, this is the URL to add as a Browser Source in OBS, not the feature's own ephemeral port.
-
-## Creating a new feature
-
-1. Add a new folder under `features/<name>/` with a `main.py`, `index.html`, and `style.css`.
-2. In `main.py`, instantiate a `FeatureRuntime`, declare which event type(s) it should receive, and register at least one source:
-
-```python
-from pathlib import Path
-from pymear.contracts.events import ChatMessageEvent
-from pymear.core.feature_runtime import FeatureRuntime
-
-runtime = FeatureRuntime(
-    name="chat",
-    event_types=[ChatMessageEvent],
-    static_dir=Path(__file__).parent,
-)
-
-def chat_transform(event: ChatMessageEvent) -> dict | None:
-    if event.text.startswith("!"):
-        return None
-    return {"user": event.user, "text": event.text}
-
-runtime.add_source("chat", chat_transform)
-```
-
-3. In `index.html` (or a separate `script.js`), open an `EventSource("events/chat")`, a relative path, so it resolves correctly both behind the proxy (`/<name>/events/chat`) and when the feature is accessed directly on its own port.
-
-## Developing pymear itself
-
-If you're working on the library rather than just consuming it:
-
-```bash
-git clone https://github.com/redyd/pymear.git
-cd pymear
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
-
-The editable install means any change to pymear's source is reflected immediately in whichever project imports it from this same environment, no reinstall needed.
-
-## Notes
-
-- Each feature is an isolated process: a crash or edit in one never affects the hub, the proxy, or any other feature.
-- The websocket protocol (`/ws` and `/register`) is considered internal, used only between the hub, the proxy, and feature processes. Browsers never talk to it directly; they only see SSE from the proxy, which relays it from their own feature's local server.
-- `*.egg-info/`, `__pycache__/`, and `.venv/` are build artifacts and should stay out of version control.
+MIT — see the [LICENSE](LICENSE) file for details.
