@@ -86,7 +86,7 @@ class Feature(Generic[E]):
         self._event_types = tuple(event_types)
         self.static_dir = static_dir
         self.port = port if port is not None else _find_free_port()
-        self.hub_url = f"ws://localhost:{hub_port}/internal/ws"
+        self.hub_url = f"http://localhost:{hub_port}/internal/events"
         self.proxy_port = proxy_port
         self.proxy_url = f"ws://localhost:{proxy_port}/register"
         self._sources: dict[str, _Source[E]] = {}
@@ -210,6 +210,7 @@ class Feature(Generic[E]):
         app = web.Application()
         for source_name in self._sources:
             app.router.add_get(f"/ws/{source_name}", self._make_ws_handler(source_name))
+            self.logger.info_v("Registered route at '/ws/%s' for source '%s'", source_name, source_name)
         app.router.add_get("/", self._index_handler)
         app.router.add_static("/", path=self.static_dir, show_index=False)
         self.logger.info_v(
@@ -218,17 +219,31 @@ class Feature(Generic[E]):
         return app
 
     async def _listen_hub(self) -> None:
-        """Maintain persistent WebSocket connection to hub with exponential backoff retry."""
+        """Maintain persistent SSE connection to hub with exponential backoff retry."""
         async with aiohttp.ClientSession() as session:
-            async for ws in self._connect_with_retry(session, self.hub_url, "hub"):
-                self.logger.info_v("Connected to hub")
-                try:
-                    async for msg in ws:
-                        if msg.type != aiohttp.WSMsgType.TEXT:
+            async for line in self._consume_sse_with_retry(session, self.hub_url):
+                await self._handle_hub_message(line)
+
+    async def _consume_sse_with_retry(self, session: aiohttp.ClientSession, url: str):
+        """
+        Async generator that yields SSE `data:` payloads from the hub,
+        reconnecting with exponential backoff whenever the stream drops.
+        """
+        delay = 1
+        while True:
+            try:
+                async with session.get(url) as response:
+                    delay = 1
+                    self.logger.info_v("Connected to hub")
+                    async for raw_line in response.content:
+                        line = raw_line.decode("utf-8").strip()
+                        if not line or not line.startswith("data:"):
                             continue
-                        await self._handle_hub_message(msg.data)
-                except ConnectionResetError:
-                    self.logger.warning("Lost hub connection, reconnecting...")
+                        yield line[len("data:"):].strip()
+            except (aiohttp.ClientError, ConnectionRefusedError, ConnectionResetError):
+                self.logger.warning("hub unreachable at %s, retry in %ds", url, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)
 
     async def _register_with_proxy(self) -> None:
         """Maintain proxy registration heartbeat with exponential backoff retry."""
@@ -299,7 +314,7 @@ class Feature(Generic[E]):
 
             try:
                 filtered = source.transform(event)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 self.logger.error_v("Transform error on source '%s'", source.name)
                 continue
 
@@ -354,7 +369,7 @@ class Feature(Generic[E]):
                                 continue
                             try:
                                 await source.on_message(payload)
-                            except Exception:
+                            except Exception:  # noqa: BLE001
                                 self.logger.error_v(
                                     "Error in on_message for source '%s'", source_name
                                 )
