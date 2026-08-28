@@ -17,6 +17,7 @@ A lightweight framework for building Twitch overlays, integrations and actions q
 - [License](#license)
 
 ## Overview
+
 Pymear's client side lets you listen to a live SSE stream of hub events (messages, subscriptions, etc.) exposed by the central server, but it also lets you define your own websocket flows per feature and react to them for maximum control.
 
 The core idea of the project is to let you create, modify or stop any flow or integration currently running, without impacting the rest of your features, since each one runs as its own separate process.
@@ -124,14 +125,34 @@ If you need more control, instantiate the object directly:
 ```python
 # main.py
 import asyncio
-from pymear import Pymear
+from pymear import PymearServer
 
-app = Pymear(hub_port=8765, proxy_port=9000)
+app = PymearServer(hub_port=8765, proxy_port=9000)
 app.client_id = "..."
 app.token = "..."
 app.channel = "..."
 asyncio.run(app.run())
 ```
+
+## Dashboard (testing)
+
+Enable an interactive testing dashboard by passing `dashboard=True`:
+
+**Via `server.run()`:**
+
+```python
+pymear.run(dashboard=True)
+```
+
+**Via `Pymear` directly:**
+
+```python
+app = PymearServer(hub_port=8765, proxy_port=9000, dashboard=True)
+```
+
+**Access at:** `http://localhost:9000/dashboard`
+
+The dashboard lets you simulate any event type for testing purposes.
 
 ### Consuming the hub's SSE stream directly
 

@@ -21,21 +21,31 @@ from pymear.core.command_router import CommandRouter
 from pymear.core.event_exporter import EventExporter
 from pymear.core.internal_bus import InternalBus
 from pymear.core.twitch_bot import TwitchBot
+from pymear.dashboard.dashboard import Dashboard
 from pymear.http.interactor import Interactor
 from pymear.http.proxy import FeatureProxy
 from pymear.utils.logger import VerboseLogger
 
 BANNER = r"""
 
-    ████████  █████ ████ █████████████    ██████   ██████   ████████
-    ▒▒███▒▒███▒▒███ ▒███ ▒▒███▒▒███▒▒███  ███▒▒███ ▒▒▒▒▒███ ▒▒███▒▒███
-    ▒███ ▒███ ▒███ ▒███  ▒███ ▒███ ▒███ ▒███████   ███████  ▒███ ▒▒▒
-    ▒███ ▒███ ▒███ ▒███  ▒███ ▒███ ▒███ ▒███▒▒▒   ███▒▒███  ▒███
-    ▒███████  ▒▒███████  █████▒███ █████▒▒██████ ▒▒████████ █████
-    ▒███▒▒▒    ▒▒▒▒▒███ ▒▒▒▒▒ ▒▒▒ ▒▒▒▒▒  ▒▒▒▒▒▒   ▒▒▒▒▒▒▒▒ ▒▒▒▒▒
-    ▒███       ███ ▒███
-    █████     ▒▒██████
-    ▒▒▒▒▒       ▒▒▒▒▒▒
+██████╗ ██╗   ██╗███╗   ███╗███████╗ █████╗ ██████╗
+██╔══██╗╚██╗ ██╔╝████╗ ████║██╔════╝██╔══██╗██╔══██╗
+██████╔╝ ╚████╔╝ ██╔████╔██║█████╗  ███████║██████╔╝
+██╔═══╝   ╚██╔╝  ██║╚██╔╝██║██╔══╝  ██╔══██║██╔══██╗
+██║        ██║   ██║ ╚═╝ ██║███████╗██║  ██║██║  ██║
+╚═╝        ╚═╝   ╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
+
+v1.0.0
+"""
+
+BANNER_TEST = r"""
+
+██████╗ ██╗   ██╗███╗   ███╗███████╗ █████╗ ██████╗      ██╗████████╗███████╗███████╗████████╗██╗
+██╔══██╗╚██╗ ██╔╝████╗ ████║██╔════╝██╔══██╗██╔══██╗    ██╔╝╚══██╔══╝██╔════╝██╔════╝╚══██╔══╝╚██╗
+██████╔╝ ╚████╔╝ ██╔████╔██║█████╗  ███████║██████╔╝    ██║    ██║   █████╗  ███████╗   ██║    ██║
+██╔═══╝   ╚██╔╝  ██║╚██╔╝██║██╔══╝  ██╔══██║██╔══██╗    ██║    ██║   ██╔══╝  ╚════██║   ██║    ██║
+██║        ██║   ██║ ╚═╝ ██║███████╗██║  ██║██║  ██║    ╚██╗   ██║   ███████╗███████║   ██║   ██╔╝
+╚═╝        ╚═╝   ╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝     ╚═╝   ╚═╝   ╚══════╝╚══════╝   ╚═╝   ╚═╝
 
 v1.0.0
 """
@@ -59,7 +69,7 @@ class PymearServer:
     and command handling across all subsystems.
     """
 
-    def __init__(self, hub_port: int = 8765, proxy_port: int = 9000, verbose: bool = False):
+    def __init__(self, hub_port: int = 8765, proxy_port: int = 9000, verbose: bool = False, dashboard: bool = False):
         """
         Initialize the Pymear hub with configurable ports and optional verbose logging.
         Sets up internal bus, broadcaster, and proxy while deferring credential resolution to runtime.
@@ -74,6 +84,7 @@ class PymearServer:
         self._prefix: str | None = None
 
         self.bus = InternalBus(verbose=verbose)
+        self.mock = dashboard
         self.broadcaster = Broadcaster(verbose=verbose)
         self.broadcaster.subscribe_to(self.bus, *ALL_EVENT_TYPES)
         self.proxy = FeatureProxy(port=self.proxy_port, verbose=verbose)
@@ -260,7 +271,7 @@ class PymearServer:
         Resolves credentials, launches HTTP server, and runs proxy concurrently.
         Ensures cleanup on exit.
         """
-        print(BANNER)
+        print(BANNER_TEST if self.mock else BANNER)
         self.logger.info("Pymear hub starting")
         self._resolve_credentials()
 
@@ -274,7 +285,12 @@ class PymearServer:
 
         try:
             self.logger.info("Starting FeatureProxy")
-            await self.proxy.run()
+            proxy_app = self.proxy.build_app()
+            if self.mock:
+                Dashboard(proxy_app, self.bus)
+                self.logger.info(f"Dashboard started on http://localhost:{self.proxy_port}/dashboard")
+
+            await self.proxy.run(proxy_app)
         finally:
             self.logger.info("Initiating hub cleanup")
             await runner.cleanup()

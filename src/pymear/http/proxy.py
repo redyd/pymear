@@ -30,13 +30,12 @@ class FeatureProxy:
         self._session: aiohttp.ClientSession | None = None
         self.logger = VerboseLogger(self.__class__.__name__, verbose)
 
-    async def run(self) -> None:
+    async def run(self, app: web.Application) -> None:
         """
         Start the proxy server and begin accepting incoming requests.
         Blocks until the process is terminated, then shuts down cleanly.
         """
         self._session = aiohttp.ClientSession()
-        app = self._build_app()
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, port=self.port)
@@ -51,7 +50,7 @@ class FeatureProxy:
             await runner.cleanup()
             self.logger.info("Proxy shut down cleanly")
 
-    def _build_app(self) -> web.Application:
+    def build_app(self) -> web.Application:
         """
         Configure and return the aiohttp application with routing rules.
         Sets up handlers for feature registration and request proxying.

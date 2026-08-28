@@ -36,8 +36,8 @@ __all__ = [
     "TextToSpeech",
 ]
 
-def run(hub_port: int = 8765, proxy_port: int = 9000, verbose: bool = False, **credentials) -> None:
-    app = PymearServer(hub_port=hub_port, proxy_port=proxy_port, verbose=verbose)
+def run(hub_port: int = 8765, proxy_port: int = 9000, verbose: bool = False, dashboard: bool = False, **credentials) -> None:
+    app = PymearServer(hub_port=hub_port, proxy_port=proxy_port, verbose=verbose, dashboard=dashboard)
     for key, value in credentials.items():
         setattr(app, key, value)
     try:
