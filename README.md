@@ -17,8 +17,7 @@ A lightweight framework for building Twitch overlays, integrations and actions q
 - [License](#license)
 
 ## Overview
-
-Pymear's client side lets you connect directly to websockets exposed by the central server, such as listening to messages or subscriptions, but it also lets you define your own websocket flows and react to them for maximum control.
+Pymear's client side lets you listen to a live SSE stream of hub events (messages, subscriptions, etc.) exposed by the central server, but it also lets you define your own websocket flows per feature and react to them for maximum control.
 
 The core idea of the project is to let you create, modify or stop any flow or integration currently running, without impacting the rest of your features, since each one runs as its own separate process.
 
@@ -31,7 +30,7 @@ Each new flow or integration you want to add to your project should be organized
 
 In your Python file, you create a `Feature` object with a name (used to register it with the proxy under `http://localhost:<port>/<name>`), a list of event types to listen to, and the path to the folder containing your `index.html` and optional css/js files (usually `Path(__file__).parent`).
 
-You can then attach a data source, which registers itself with the proxy under `http://localhost:<port>/ws/<source_name>`, and pass it two optional methods: `on_message` and `transform`.
+You can then attach a data source, which registers itself with the proxy under `http://localhost:<port>/<name>/ws/<source_name>`, and pass it two optional methods: `on_message` and `transform`.
 
 ## Creating a feature
 
@@ -132,6 +131,30 @@ app.token = "..."
 app.channel = "..."
 asyncio.run(app.run())
 ```
+
+### Consuming the hub's SSE stream directly
+
+The hub exposes every subscribed event as a live SSE stream at `http://localhost:<hub_port>/internal/events` (`8765` by default). This is what `Feature` uses internally to receive hub events, but you can also consume it directly, for example from a script that doesn't need the full `Feature`/proxy machinery:
+
+```python
+import json
+import aiohttp
+import asyncio
+
+async def listen() -> None:
+    async with aiohttp.ClientSession() as session:
+        async with session.get("http://localhost:8765/internal/events") as response:
+            async for raw_line in response.content:
+                line = raw_line.decode("utf-8").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                event = json.loads(line[len("data:"):].strip())
+                print(event)
+
+asyncio.run(listen())
+```
+
+The stream is one-way: server to client only. There is no way to send messages back through this channel.
 
 ## License
 

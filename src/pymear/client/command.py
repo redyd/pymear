@@ -4,7 +4,7 @@ from typing import cast
 
 import aiohttp
 
-from pymear.contracts.commands import CreatePollRequest
+from pymear.contracts.commands import CreateMessageRequest, CreatePollRequest
 from pymear.utils.logger import VerboseLogger
 
 
@@ -127,3 +127,14 @@ class Command:
         res = cast(int, await self._get("subscriber_count"))
         self.logger.info_v(f"Subscriber count: {res}")
         return res
+
+    async def send_message(self, message: str) -> None:
+        """
+        Send a message to the connected channel.
+
+        Args:
+            message (str): The message to send
+        """
+        self.logger.info_v(f"Sending message: {message}")
+        await self._post("message", CreateMessageRequest(message).to_dict())
+        self.logger.info("Message sent")

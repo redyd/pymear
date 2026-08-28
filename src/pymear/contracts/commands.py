@@ -23,3 +23,12 @@ class CreatePollRequest:
             "bits_voting_enabled": self.bits_voting_enabled,
             "bits_per_vote": self.bits_per_vote,
         }
+
+@dataclass
+class CreateMessageRequest:
+    message: str
+
+    def to_dict(self) -> dict:
+        return {
+            "message": self.message,
+        }

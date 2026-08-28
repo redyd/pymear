@@ -158,13 +158,12 @@ class Feature(Generic[E]):
         their own KeyboardInterrupt handling.
         """
         try:
-            asyncio.run(self._run())
+            asyncio.run(self.async_start())
         except KeyboardInterrupt:
             pass
 
-    # ==================== PRIVATE METHODS ====================
 
-    async def _run(self) -> None:
+    async def async_start(self) -> None:
         """
         Start the feature server and begin listening for hub events.
 
@@ -204,6 +203,7 @@ class Feature(Generic[E]):
             await runner.cleanup()
             self.logger.info("Feature '%s' shut down cleanly", self.name)
 
+    # ==================== PRIVATE METHODS ====================
 
     def _build_app(self) -> web.Application:
         """Build the aiohttp application with WebSocket routes and static file serving."""
@@ -225,10 +225,6 @@ class Feature(Generic[E]):
                 await self._handle_hub_message(line)
 
     async def _consume_sse_with_retry(self, session: aiohttp.ClientSession, url: str):
-        """
-        Async generator that yields SSE `data:` payloads from the hub,
-        reconnecting with exponential backoff whenever the stream drops.
-        """
         delay = 1
         while True:
             try:
@@ -241,9 +237,16 @@ class Feature(Generic[E]):
                             continue
                         yield line[len("data:"):].strip()
             except (aiohttp.ClientError, ConnectionRefusedError, ConnectionResetError):
-                self.logger.warning("hub unreachable at %s, retry in %ds", url, delay)
+                self.logger.warning(
+                    "hub unreachable at %s, retry in %ds", url, delay
+                )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 30)
+            except TimeoutError:
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    raise asyncio.CancelledError from None
+                self.logger.warning("hub read timed out, instant retry")
 
     async def _register_with_proxy(self) -> None:
         """Maintain proxy registration heartbeat with exponential backoff retry."""

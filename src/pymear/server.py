@@ -147,13 +147,13 @@ class Pymear:
             logger.warning("Twitch credentials missing: bot not started")
             return
 
-        self._interactor = await Interactor.create(self._client_id, self._token, self._channel)
         self._bot = TwitchBot(
             token=self._token,
             client_id=self._client_id,
             prefix=self._prefix if self._prefix else "!",
             channel=self._channel
         )
+        self._interactor = await Interactor.create(self._client_id, self._token, self._channel, self._bot)
         self._event_exporter = EventExporter(
             bot=self._bot,
             interactor=self._interactor,
