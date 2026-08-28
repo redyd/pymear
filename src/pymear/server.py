@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%d/%m %H:%M:%S",
 )
 logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
 
@@ -159,10 +160,7 @@ class Pymear:
             bus=self.bus,
         )
 
-        if self._interactor:
-            self._command_router = CommandRouter(self._interactor, app)
-        else:
-            logger.warning("no interactor: command router not registered")
+        self._command_router = CommandRouter(self._interactor, app)
 
         task = asyncio.create_task(self._bot.start())
         task.add_done_callback(self._log_exporter_error)
