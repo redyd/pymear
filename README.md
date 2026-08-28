@@ -57,7 +57,8 @@ def handling(event: ChatMessageEvent | DeletedMessageEvent) -> dict | None:
 def main() -> None:
     feature = Feature(
         name="chat",
-        event_types=[ChatMessageEvent, DeletedMessageEvent]
+        event_types=[ChatMessageEvent, DeletedMessageEvent],
+        static_dir=Path(__file__).parent,
     )
     feature.add_source("chat_ws", transform=handling)
     feature.start()

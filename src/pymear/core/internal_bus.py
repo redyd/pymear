@@ -33,9 +33,9 @@ class InternalBus:
         await bus.publish(ChatMessageEvent(user="Alice", text="Hello!"))
     """
 
-    def __init__(self):
+    def __init__(self, verbose: bool = False):
         self._handlers: dict[type[Event], list[Handler]] = defaultdict(list)
-        self.logger = VerboseLogger(self.__class__.__name__, False)
+        self.logger = VerboseLogger(self.__class__.__name__, verbose)
         self.logger.info("InternalBus initialized")
 
     def subscribe(self, event_type: type[Event], handler: Handler) -> None:

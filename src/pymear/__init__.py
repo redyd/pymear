@@ -15,7 +15,7 @@ from .contracts.events import (
 from .core.broadcaster import Broadcaster
 from .core.event_exporter import EventExporter
 from .core.internal_bus import InternalBus
-from .server import Pymear
+from .server import PymearServer
 from .utils.speaker import TextToSpeech
 
 __all__ = [
@@ -30,14 +30,17 @@ __all__ = [
     "FollowEvent",
     "GiftSubscriptionEvent",
     "InternalBus",
-    "Pymear",
+    "PymearServer",
     "RaidEvent",
     "SubscriptionEvent",
     "TextToSpeech",
 ]
 
-def run(hub_port: int = 8765, proxy_port: int = 9000, **credentials) -> None:
-    app = Pymear(hub_port=hub_port, proxy_port=proxy_port)
+def run(hub_port: int = 8765, proxy_port: int = 9000, verbose: bool = False, **credentials) -> None:
+    app = PymearServer(hub_port=hub_port, proxy_port=proxy_port, verbose=verbose)
     for key, value in credentials.items():
         setattr(app, key, value)
-    asyncio.run(app.run())
+    try:
+        asyncio.run(app.run())
+    except KeyboardInterrupt:
+        pass

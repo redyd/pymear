@@ -33,7 +33,7 @@ class FeatureProxy:
     async def run(self) -> None:
         """
         Start the proxy server and begin accepting incoming requests.
-        Blocks indefinitely until the process is terminated.
+        Blocks until the process is terminated, then shuts down cleanly.
         """
         self._session = aiohttp.ClientSession()
         app = self._build_app()
@@ -44,7 +44,12 @@ class FeatureProxy:
         self.logger.info("Proxy started on http://localhost:%s", self.port)
         self.logger.info_v(f"Registered routes: {list(self._routes.keys())}")
 
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await self._session.close()
+            await runner.cleanup()
+            self.logger.info("Proxy shut down cleanly")
 
     def _build_app(self) -> web.Application:
         """
