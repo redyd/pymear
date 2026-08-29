@@ -1,5 +1,10 @@
 import logging
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
 
 class VerboseLogger:
     def __init__(self, name: str, verbose: bool = False) -> None:

@@ -42,7 +42,6 @@ A simple chat feature can look like this:
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import asdict
 from pathlib import Path
 

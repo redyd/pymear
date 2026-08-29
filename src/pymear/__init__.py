@@ -2,6 +2,7 @@ import asyncio
 
 from .client.command import Command
 from .client.feature import Feature
+from .client.speaker import ElevenLabsTTS, NativeTTS
 from .contracts.events import (
     ChatMessageEvent,
     CheerEvent,
@@ -16,7 +17,6 @@ from .core.broadcaster import Broadcaster
 from .core.event_exporter import EventExporter
 from .core.internal_bus import InternalBus
 from .server import PymearServer
-from .utils.speaker import TextToSpeech
 
 __all__ = [
     "Broadcaster",
@@ -24,16 +24,17 @@ __all__ = [
     "CheerEvent",
     "Command",
     "DeletedMessageEvent",
+    "ElevenLabsTTS",
     "Event",
     "EventExporter",
     "Feature",
     "FollowEvent",
     "GiftSubscriptionEvent",
     "InternalBus",
+    "NativeTTS",
     "PymearServer",
     "RaidEvent",
     "SubscriptionEvent",
-    "TextToSpeech",
 ]
 
 def run(hub_port: int = 8765, proxy_port: int = 9000, verbose: bool = False, dashboard: bool = False, **credentials) -> None:

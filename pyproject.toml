@@ -11,6 +11,8 @@ dependencies = [
     "aiohttp",
     "python-dotenv",
     "pyttsx3",
+    "elevenlabs",
+    "pyaudio"
 ]
 
 [tool.setuptools.packages.find]
