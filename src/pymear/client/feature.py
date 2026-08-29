@@ -4,6 +4,7 @@ import asyncio
 import json
 import socket
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from pathlib import Path
 from typing import Generic, TypeVar
 
@@ -30,7 +31,7 @@ class _Source(Generic[E]):
     def __init__(
         self,
         name: str,
-        transform: Callable[[E], dict | None] | None,
+        transform: Callable[[E], dict | Event | None] | None,
         on_message: Callable[[dict], Awaitable[None]] | None,
     ):
         self.name = name
@@ -97,7 +98,7 @@ class Feature(Generic[E]):
     def add_source(
         self,
         name: str,
-        transform: Callable[[E], dict | None] | None = None,
+        transform: Callable[[E], dict | Event | None] | None = None,
         on_message: Callable[[dict], Awaitable[None]] | None = None,
     ) -> None:
         """
@@ -326,6 +327,9 @@ class Feature(Generic[E]):
                     "Transform filtered event on source '%s'", source.name
                 )
                 continue
+
+            if isinstance(filtered, Event):
+                filtered = asdict(filtered)
 
             for queue in source.queues:
                 await queue.put(filtered)
