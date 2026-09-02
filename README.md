@@ -68,23 +68,33 @@ if __name__ == "__main__":
     main()
 ```
 
-On the front end, subscribe to the `ws/chat_ws` websocket:
+On the front end, load Pymear's reconnecting overlay helper and subscribe to
+the `chat_ws` source:
 
 ```javascript
 // script.js
 const chat = document.getElementById("chat");
 const MAX_MESSAGES = 50;
-const source = new WebSocket("ws/chat_ws");
 
-source.onmessage = (rawEvent) => {
-    const event = JSON.parse(rawEvent.data);
+const source = connectPymearSource("chat_ws", {
+  onMessage(event) {
     if (event.kind === "delete") {
         removeMessage(event.message_id);
     } else {
         appendMessage(event);
     }
-};
+  },
+});
 ```
+
+```html
+<script src="pymear-overlay.js"></script>
+<script src="script.js"></script>
+```
+
+The helper reconnects automatically when OBS or the proxy drops a websocket. When
+your feature is served at `http://localhost:9000/<feature>/`, the helper builds
+the matching websocket URL for `/ws/<source>` without hardcoded ports.
 
 ## Interacting with the Twitch API
 

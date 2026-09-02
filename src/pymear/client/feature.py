@@ -16,6 +16,7 @@ from pymear.contracts.events_mapper import decapsulate
 from pymear.utils.logger import VerboseLogger
 
 E = TypeVar("E", bound=Event)
+OVERLAY_HELPER = Path(__file__).parent / "static" / "pymear-overlay.js"
 
 
 def _find_free_port() -> int:
@@ -82,6 +83,9 @@ class Feature(Generic[E]):
         hub_port: int = 8765,
         proxy_port: int = 9000,
         verbose: bool = False,
+        ws_heartbeat: float = 15,
+        queue_maxsize: int = 100,
+        client_send_timeout: float = 10,
     ) -> None:
         self.name = name
         self._event_types = tuple(event_types)
@@ -90,6 +94,9 @@ class Feature(Generic[E]):
         self.hub_url = f"http://localhost:{hub_port}/internal/events"
         self.proxy_port = proxy_port
         self.proxy_url = f"ws://localhost:{proxy_port}/register"
+        self.ws_heartbeat = ws_heartbeat
+        self.queue_maxsize = queue_maxsize
+        self.client_send_timeout = client_send_timeout
         self._sources: dict[str, _Source[E]] = {}
         self.logger = VerboseLogger(self.__class__.__name__, verbose)
 
@@ -144,8 +151,7 @@ class Feature(Generic[E]):
                 self.name,
             )
             return
-        for queue in source.queues:
-            await queue.put(payload)
+        self._broadcast_to_source(source, payload)
         self.logger.info_v(
             "Pushed payload to %d client queue(s) for source '%s'",
             len(source.queues),
@@ -212,16 +218,19 @@ class Feature(Generic[E]):
         for source_name in self._sources:
             app.router.add_get(f"/ws/{source_name}", self._make_ws_handler(source_name))
             self.logger.info_v("Registered route at '/ws/%s' for source '%s'", source_name, source_name)
+        app.router.add_get("/pymear-overlay.js", self._overlay_helper_handler)
         app.router.add_get("/", self._index_handler)
         app.router.add_static("/", path=self.static_dir, show_index=False)
         self.logger.info_v(
-            "Registered routes: %d sources + static + index", len(self._sources) + 2
+            "Registered routes: %d sources + helper + static + index",
+            len(self._sources) + 3,
         )
         return app
 
     async def _listen_hub(self) -> None:
         """Maintain persistent SSE connection to hub with exponential backoff retry."""
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async for line in self._consume_sse_with_retry(session, self.hub_url):
                 await self._handle_hub_message(line)
 
@@ -251,7 +260,8 @@ class Feature(Generic[E]):
 
     async def _register_with_proxy(self) -> None:
         """Maintain proxy registration heartbeat with exponential backoff retry."""
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async for ws in self._connect_with_retry(session, self.proxy_url, "proxy"):
                 self.logger.info_v("Registered with proxy on port %d", self.port)
                 self.logger.info("Feature running on proxy at http://localhost:%d/%s/", self.proxy_port, self.name)
@@ -279,7 +289,7 @@ class Feature(Generic[E]):
         delay = 1
         while True:
             try:
-                async with session.ws_connect(url) as ws:
+                async with session.ws_connect(url, heartbeat=self.ws_heartbeat) as ws:
                     delay = 1
                     yield ws
             except (aiohttp.ClientError, ConnectionRefusedError):
@@ -331,10 +341,29 @@ class Feature(Generic[E]):
             if isinstance(filtered, Event):
                 filtered = asdict(filtered)
 
-            for queue in source.queues:
-                await queue.put(filtered)
+            self._broadcast_to_source(source, filtered)
 
         self.logger.info_v("Dispatched event to %d source(s)", len(self._sources))
+
+    def _broadcast_to_source(self, source: _Source[E], payload: dict) -> None:
+        """Put payloads in client queues without letting stale clients block the feature."""
+        for queue in list(source.queues):
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                self.logger.warning(
+                    "Client queue full on source '%s'; dropped oldest payload",
+                    source.name,
+                )
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                self.logger.warning(
+                    "Client queue still full on source '%s'; dropped newest payload",
+                    source.name,
+                )
 
     def _make_ws_handler(
         self, source_name: str
@@ -343,10 +372,10 @@ class Feature(Generic[E]):
 
         async def handler(request: web.Request) -> web.WebSocketResponse:
             source = self._sources[source_name]
-            ws = web.WebSocketResponse()
+            ws = web.WebSocketResponse(heartbeat=self.ws_heartbeat)
             await ws.prepare(request)
 
-            queue: asyncio.Queue[dict] = asyncio.Queue()
+            queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=self.queue_maxsize)
             source.queues.add(queue)
             self.logger.info_v(
                 "Client connected to source '%s' (queues: %d)",
@@ -358,8 +387,16 @@ class Feature(Generic[E]):
                 while True:
                     payload = await queue.get()
                     try:
-                        await ws.send_str(json.dumps(payload))
-                    except ConnectionResetError:
+                        await asyncio.wait_for(
+                            ws.send_str(json.dumps(payload)),
+                            timeout=self.client_send_timeout,
+                        )
+                    except (ConnectionResetError, TimeoutError):
+                        self.logger.warning(
+                            "Client send failed on source '%s'; closing websocket",
+                            source_name,
+                        )
+                        await ws.close()
                         break
 
             sender_task = asyncio.create_task(sender())
@@ -385,6 +422,7 @@ class Feature(Generic[E]):
                         break
             finally:
                 sender_task.cancel()
+                await asyncio.gather(sender_task, return_exceptions=True)
                 source.queues.discard(queue)
                 self.logger.info_v(
                     "Client disconnected from source '%s' (queues: %d)",
@@ -395,6 +433,10 @@ class Feature(Generic[E]):
             return ws
 
         return handler
+
+    async def _overlay_helper_handler(self, request: web.Request) -> web.FileResponse:
+        """Serve the reconnecting browser helper for OBS overlays."""
+        return web.FileResponse(OVERLAY_HELPER)
 
     async def _index_handler(self, request: web.Request) -> web.FileResponse:
         """Serve the static index.html entry point."""

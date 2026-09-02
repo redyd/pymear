@@ -23,9 +23,10 @@ class FeatureProxy:
     Supports both HTTP and WebSocket connections with dynamic route registration via WebSocket.
     """
 
-    def __init__(self, port: int = 9000, verbose: bool = False):
+    def __init__(self, port: int = 9000, verbose: bool = False, ws_heartbeat: float = 15):
         """Initialize the proxy with a listening port and optional verbose logging."""
         self.port = port
+        self.ws_heartbeat = ws_heartbeat
         self._routes: dict[str, int] = {}
         self._session: aiohttp.ClientSession | None = None
         self.logger = VerboseLogger(self.__class__.__name__, verbose)
@@ -35,7 +36,8 @@ class FeatureProxy:
         Start the proxy server and begin accepting incoming requests.
         Blocks until the process is terminated, then shuts down cleanly.
         """
-        self._session = aiohttp.ClientSession()
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=30)
+        self._session = aiohttp.ClientSession(timeout=timeout)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, port=self.port)
@@ -71,7 +73,7 @@ class FeatureProxy:
         Maintains route mappings while the connection is active and cleans up on disconnect.
         """
         self.logger.info_v("WebSocket registration handler invoked")
-        ws = web.WebSocketResponse()
+        ws = web.WebSocketResponse(heartbeat=self.ws_heartbeat)
         await ws.prepare(request)
 
         registered_name: str | None = None
@@ -171,46 +173,64 @@ class FeatureProxy:
             target_url += f"?{request.query_string}"
 
         self.logger.info_v(f"Establishing WebSocket relay to {target_url}")
-        client_ws = web.WebSocketResponse()
+        client_ws = web.WebSocketResponse(heartbeat=self.ws_heartbeat)
         await client_ws.prepare(request)
 
         assert self._session is not None
-        async with self._session.ws_connect(target_url) as upstream_ws:
-            self.logger.info_v(
-                "WebSocket relay established, forwarding messages bidirectionally"
+        try:
+            upstream_ws_context = self._session.ws_connect(
+                target_url, heartbeat=self.ws_heartbeat
             )
+            async with upstream_ws_context as upstream_ws:
+                self.logger.info_v(
+                    "WebSocket relay established, forwarding messages bidirectionally"
+                )
 
-            async def forward_to_upstream() -> None:
-                """Forward client messages to the backend service."""
-                async for msg in client_ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        await upstream_ws.send_str(msg.data)
-                    elif msg.type == aiohttp.WSMsgType.BINARY:
-                        await upstream_ws.send_bytes(msg.data)
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        self.logger.info_v("Client WebSocket errored, stopping forward")
-                        break
+                async def forward_to_upstream() -> str:
+                    """Forward client messages to the backend service."""
+                    async for msg in client_ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            await upstream_ws.send_str(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.BINARY:
+                            await upstream_ws.send_bytes(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.ERROR:
+                            self.logger.info_v("Client WebSocket errored")
+                            return "client_error"
+                    return "client_closed"
 
-            async def forward_to_client() -> None:
-                """Forward backend messages to the client."""
-                async for msg in upstream_ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        await client_ws.send_str(msg.data)
-                    elif msg.type == aiohttp.WSMsgType.BINARY:
-                        await client_ws.send_bytes(msg.data)
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        self.logger.info_v(
-                            "Upstream WebSocket errored, stopping forward"
-                        )
-                        break
+                async def forward_to_client() -> str:
+                    """Forward backend messages to the client."""
+                    async for msg in upstream_ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            await client_ws.send_str(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.BINARY:
+                            await client_ws.send_bytes(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.ERROR:
+                            self.logger.info_v("Upstream WebSocket errored")
+                            return "upstream_error"
+                    return "upstream_closed"
 
-            task_up = asyncio.create_task(forward_to_upstream())
-            task_down = asyncio.create_task(forward_to_client())
-            _, pending = await asyncio.wait(
-                [task_up, task_down], return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in pending:
-                task.cancel()
+                task_up = asyncio.create_task(forward_to_upstream())
+                task_down = asyncio.create_task(forward_to_client())
+                done, pending = await asyncio.wait(
+                    [task_up, task_down], return_when=asyncio.FIRST_COMPLETED
+                )
+                reason = "unknown"
+                for task in done:
+                    try:
+                        reason = task.result()
+                    except Exception as exc:  # noqa: BLE001
+                        reason = f"relay_error:{type(exc).__name__}"
+                        self.logger.warning("WebSocket relay task failed: %r", exc)
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                await upstream_ws.close()
+                await client_ws.close()
+                self.logger.info_v("WebSocket relay closing: %s", reason)
+        except aiohttp.ClientError as exc:
+            self.logger.warning("WebSocket upstream unavailable for '%s': %r", name, exc)
+            await client_ws.close()
 
         self.logger.info_v("WebSocket relay terminated")
         return client_ws
