@@ -12,7 +12,8 @@ import aiohttp
 from aiohttp import web
 
 from pymear.contracts.events import Event
-from pymear.contracts.events_mapper import decapsulate
+from pymear.core.hub_listener import HubListener
+from pymear.core.websocket_pipe import WebsocketPipe
 from pymear.utils.logger import VerboseLogger
 
 E = TypeVar("E", bound=Event)
@@ -26,50 +27,23 @@ def _find_free_port() -> int:
         return sock.getsockname()[1]
 
 
-class _Source(Generic[E]):
-    """Internal container for a WebSocket source configuration."""
+class _SourceContext(Generic[E]):
+    """Binds a WebsocketPipe to its optional hub transform."""
 
     def __init__(
         self,
-        name: str,
+        pipe: WebsocketPipe,
         transform: Callable[[E], dict | Event | None] | None,
-        on_message: Callable[[dict], Awaitable[None]] | None,
-    ):
-        self.name = name
+    ) -> None:
+        self.pipe = pipe
         self.transform = transform
-        self.on_message = on_message
-        self.queues: set[asyncio.Queue[dict]] = set()
 
 
 class Feature(Generic[E]):
     """
-    WebSocket Hub Feature Manager for Twitch Channel Operations.
-
-    Provides a foundation for building stream features that connect to a central hub
-    via WebSocket and expose filtered event streams to WebSocket clients. Each feature
-    serves a static UI and registers with a routing proxy for discovery.
-
-    Core Capabilities:
-        - Subscribe to typed hub events with automatic filtering
-        - Expose bidirectional WebSocket channels per source
-        - Transform outbound events with custom payload logic
-        - Handle inbound messages from connected clients
-        - Auto-reconnect hub and proxy connections with exponential backoff
-        - Serve static assets (HTML, JS, CSS) for frontend integration
-
-    Usage:
-        feature = Feature(
-            name="chat",
-            event_types=[ChatMessageEvent],
-            static_dir=Path(__file__).parent,
-            verbose=True
-        )
-        feature.add_source(
-            "chat",
-            transform=lambda e: {"user": e.user, "text": e.text},
-            on_message=lambda payload: handle_incoming(payload),
-        )
-        asyncio.run(feature.run())
+    Orchestrates a feature: owns one WebsocketPipe per source, filters and
+    transforms hub events via HubListener, and exposes a generic send() for
+    custom, non-hub-driven triggers (keypress, awaited task completion, etc.).
     """
 
     # ==================== PUBLIC API ====================
@@ -97,89 +71,75 @@ class Feature(Generic[E]):
         self.ws_heartbeat = ws_heartbeat
         self.queue_maxsize = queue_maxsize
         self.client_send_timeout = client_send_timeout
-        self._sources: dict[str, _Source[E]] = {}
+        self._sources: dict[str, _SourceContext[E]] = {}
         self.logger = VerboseLogger(self.__class__.__name__, verbose)
+        self._hub_listener = HubListener(self.hub_url, self._on_hub_event, self.logger)
 
         self.logger.info_v("Feature '%s' initialized on port %d", self.name, self.port)
 
     def add_source(
         self,
         name: str,
-        transform: Callable[[E], dict | Event | None] | None = None,
-        on_message: Callable[[dict], Awaitable[None]] | None = None,
+        on_events_transform: Callable[[E], dict | Event | None] | None = None,
+        on_ws_response: Callable[[dict], Awaitable[None]] | None = None,
     ) -> None:
         """
         Register a bidirectional WebSocket source for this feature.
 
-        Creates a dedicated endpoint at /ws/<name> that can:
-            - Push transformed hub events to connected clients (via transform callback)
-            - Receive and forward client messages (via on_message callback)
-
-        A source with only on_message acts as a receive-only channel.
-        A source with only transform acts as a push-only channel.
-
-        Args:
-            name: Unique identifier for the source (endpoint path segment)
-            transform: Optional callback to convert hub events to client payloads
-                     Return None to filter out specific events from this stream
-            on_message: Optional callback to process incoming client messages
+        on_event_transform binds the source to hub events: present, the source
+        receives filtered/transformed events automatically. Absent, the
+        source only exists via direct send() calls, e.g. from a keypress
+        handler or after an awaited task completes.
         """
         self.logger.info_v("Adding source '%s' to feature '%s'", name, self.name)
-        self._sources[name] = _Source(name, transform, on_message)
-        self.logger.info_v(
-            "Source '%s' registered: transform=%s, on_message=%s",
+        pipe = WebsocketPipe(
             name,
-            transform is not None,
-            on_message is not None,
+            on_ws_response,
+            self.ws_heartbeat,
+            self.queue_maxsize,
+            self.client_send_timeout,
+            self.logger,
+        )
+        self._sources[name] = _SourceContext(pipe, on_events_transform)
+        self.logger.info_v(
+            "Source '%s' registered: on_event_transform=%s, on_message=%s",
+            name,
+            on_events_transform is not None,
+            on_ws_response is not None,
         )
 
     async def send(self, source_name: str, payload: dict) -> None:
         """
         Push a payload to all connected clients of a specific source.
 
-        Bypasses event filtering and delivers directly to the source's queues.
-
-        Args:
-            source_name: Identifier of the target source
-            payload: Dictionary to serialize and broadcast to clients
+        Generic entry point: used internally after a hub transform, and
+        externally for any custom trigger unrelated to hub events.
         """
-        source = self._sources.get(source_name)
-        if source is None:
+        ctx = self._sources.get(source_name)
+        if ctx is None:
             self.logger.warning(
                 "Cannot send to unknown source '%s' on feature '%s'",
                 source_name,
                 self.name,
             )
             return
-        self._broadcast_to_source(source, payload)
-        self.logger.info_v(
-            "Pushed payload to %d client queue(s) for source '%s'",
-            len(source.queues),
-            source_name,
-        )
+        ctx.pipe.push(payload)
+        self.logger.info_v("Pushed payload to source '%s'", source_name)
 
     def start(self) -> None:
         """
         Synchronous entry point: runs the feature until interrupted (Ctrl+C),
-        then shuts down cleanly. Wraps asyncio.run() so callers don't need
-        their own KeyboardInterrupt handling.
+        then shuts down cleanly.
         """
         try:
             asyncio.run(self.async_start())
         except KeyboardInterrupt:
             pass
 
-
     async def async_start(self) -> None:
         """
         Start the feature server and begin listening for hub events.
-
-        Orchestrates:
-            1. Starting the local WebSocket/HTTP server
-            2. Connecting to the hub with auto-retry
-            3. Registering with the proxy with auto-retry
-
-        This method blocks until the application is terminated.
+        Blocks until the application is terminated.
         """
         app = self._build_app()
         runner = web.AppRunner(app)
@@ -195,7 +155,7 @@ class Feature(Generic[E]):
         self.logger.info_v("Registering with proxy at %s", self.proxy_url)
 
         tasks = [
-            asyncio.create_task(self._listen_hub()),
+            asyncio.create_task(self._hub_listener.run()),
             asyncio.create_task(self._register_with_proxy()),
         ]
 
@@ -215,9 +175,11 @@ class Feature(Generic[E]):
     def _build_app(self) -> web.Application:
         """Build the aiohttp application with WebSocket routes and static file serving."""
         app = web.Application()
-        for source_name in self._sources:
-            app.router.add_get(f"/ws/{source_name}", self._make_ws_handler(source_name))
-            self.logger.info_v("Registered route at '/ws/%s' for source '%s'", source_name, source_name)
+        for name, ctx in self._sources.items():
+            app.router.add_get(f"/ws/{name}", ctx.pipe.handle)
+            self.logger.info_v(
+                "Registered route at '/ws/%s' for source '%s'", name, name
+            )
         app.router.add_get("/pymear-overlay.js", self._overlay_helper_handler)
         app.router.add_get("/", self._index_handler)
         app.router.add_static("/", path=self.static_dir, show_index=False)
@@ -227,36 +189,34 @@ class Feature(Generic[E]):
         )
         return app
 
-    async def _listen_hub(self) -> None:
-        """Maintain persistent SSE connection to hub with exponential backoff retry."""
-        timeout = aiohttp.ClientTimeout(total=None, sock_connect=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async for line in self._consume_sse_with_retry(session, self.hub_url):
-                await self._handle_hub_message(line)
+    async def _on_hub_event(self, event: Event) -> None:
+        """Filter a hub event by type, then dispatch it through each source's transform."""
+        if not isinstance(event, self._event_types):
+            self.logger.info_v(
+                "Event type %s not subscribed, skipping", type(event).__name__
+            )
+            return
 
-    async def _consume_sse_with_retry(self, session: aiohttp.ClientSession, url: str):
-        delay = 1
-        while True:
+        for name, ctx in self._sources.items():
+            if ctx.transform is None:
+                continue
+
             try:
-                async with session.get(url) as response:
-                    delay = 1
-                    self.logger.info_v("Connected to hub")
-                    async for raw_line in response.content:
-                        line = raw_line.decode("utf-8").strip()
-                        if not line or not line.startswith("data:"):
-                            continue
-                        yield line[len("data:"):].strip()
-            except (aiohttp.ClientError, ConnectionRefusedError, ConnectionResetError):
-                self.logger.warning(
-                    "hub unreachable at %s, retry in %ds", url, delay
-                )
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 30)
-            except TimeoutError:
-                task = asyncio.current_task()
-                if task is not None and task.cancelling():
-                    raise asyncio.CancelledError from None
-                self.logger.warning("hub read timed out, instant retry")
+                filtered = ctx.transform(event)
+            except Exception:  # noqa: BLE001
+                self.logger.error_v("Transform error on source '%s'", name)
+                continue
+
+            if filtered is None:
+                self.logger.info_v("Transform filtered event on source '%s'", name)
+                continue
+
+            if isinstance(filtered, Event):
+                filtered = asdict(filtered)
+
+            ctx.pipe.push(filtered)
+
+        self.logger.info_v("Dispatched event to %d source(s)", len(self._sources))
 
     async def _register_with_proxy(self) -> None:
         """Maintain proxy registration heartbeat with exponential backoff retry."""
@@ -264,7 +224,11 @@ class Feature(Generic[E]):
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async for ws in self._connect_with_retry(session, self.proxy_url, "proxy"):
                 self.logger.info_v("Registered with proxy on port %d", self.port)
-                self.logger.info("Feature running on proxy at http://localhost:%d/%s/", self.proxy_port, self.name)
+                self.logger.info(
+                    "Feature running on proxy at http://localhost:%d/%s/",
+                    self.proxy_port,
+                    self.name,
+                )
                 try:
                     await ws.send_str(
                         json.dumps({"name": self.name, "port": self.port})
@@ -281,11 +245,7 @@ class Feature(Generic[E]):
         url: str,
         label: str,
     ):
-        """
-        Generator that yields WebSocket connections with automatic reconnection.
-
-        Implements exponential backoff starting at 1s, capped at 30s.
-        """
+        """Generator yielding WebSocket connections with automatic reconnection."""
         delay = 1
         while True:
             try:
@@ -298,141 +258,6 @@ class Feature(Generic[E]):
                 )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 30)
-
-    async def _handle_hub_message(self, raw: str) -> None:
-        """
-        Process incoming hub messages by decapsulating, filtering, and distributing.
-
-        Steps:
-            1. Parse JSON and decapsulate into typed Event object
-            2. Filter by registered event types for this feature
-            3. Apply source transforms to generate client payloads
-            4. Dispatch to all queued client connections
-        """
-        try:
-            payload = json.loads(raw)
-            event = decapsulate(payload)
-        except (ValueError, KeyError):
-            self.logger.info_v("Skipping malformed hub message")
-            return
-
-        if not isinstance(event, self._event_types):
-            self.logger.info_v(
-                "Event type %s not subscribed, skipping", type(event).__name__
-            )
-            return
-
-        for source in self._sources.values():
-            if source.transform is None:
-                continue
-
-            try:
-                filtered = source.transform(event)
-            except Exception:  # noqa: BLE001
-                self.logger.error_v("Transform error on source '%s'", source.name)
-                continue
-
-            if filtered is None:
-                self.logger.info_v(
-                    "Transform filtered event on source '%s'", source.name
-                )
-                continue
-
-            if isinstance(filtered, Event):
-                filtered = asdict(filtered)
-
-            self._broadcast_to_source(source, filtered)
-
-        self.logger.info_v("Dispatched event to %d source(s)", len(self._sources))
-
-    def _broadcast_to_source(self, source: _Source[E], payload: dict) -> None:
-        """Put payloads in client queues without letting stale clients block the feature."""
-        for queue in list(source.queues):
-            if queue.full():
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                self.logger.warning(
-                    "Client queue full on source '%s'; dropped oldest payload",
-                    source.name,
-                )
-            try:
-                queue.put_nowait(payload)
-            except asyncio.QueueFull:
-                self.logger.warning(
-                    "Client queue still full on source '%s'; dropped newest payload",
-                    source.name,
-                )
-
-    def _make_ws_handler(
-        self, source_name: str
-    ) -> Callable[[web.Request], Awaitable[web.WebSocketResponse]]:
-        """Create a WebSocket handler closure for a specific source."""
-
-        async def handler(request: web.Request) -> web.WebSocketResponse:
-            source = self._sources[source_name]
-            ws = web.WebSocketResponse(heartbeat=self.ws_heartbeat)
-            await ws.prepare(request)
-
-            queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=self.queue_maxsize)
-            source.queues.add(queue)
-            self.logger.info_v(
-                "Client connected to source '%s' (queues: %d)",
-                source_name,
-                len(source.queues),
-            )
-
-            async def sender() -> None:
-                while True:
-                    payload = await queue.get()
-                    try:
-                        await asyncio.wait_for(
-                            ws.send_str(json.dumps(payload)),
-                            timeout=self.client_send_timeout,
-                        )
-                    except (ConnectionResetError, TimeoutError):
-                        self.logger.warning(
-                            "Client send failed on source '%s'; closing websocket",
-                            source_name,
-                        )
-                        await ws.close()
-                        break
-
-            sender_task = asyncio.create_task(sender())
-            try:
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        if source.on_message is not None:
-                            try:
-                                payload = json.loads(msg.data)
-                            except json.JSONDecodeError:
-                                self.logger.warning(
-                                    "Invalid JSON on source '%s'", source_name
-                                )
-                                continue
-                            try:
-                                await source.on_message(payload)
-                            except Exception:  # noqa: BLE001
-                                self.logger.error_v(
-                                    "Error in on_message for source '%s'", source_name
-                                )
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        self.logger.info_v("WebSocket error on source '%s'", source_name)
-                        break
-            finally:
-                sender_task.cancel()
-                await asyncio.gather(sender_task, return_exceptions=True)
-                source.queues.discard(queue)
-                self.logger.info_v(
-                    "Client disconnected from source '%s' (queues: %d)",
-                    source_name,
-                    len(source.queues),
-                )
-
-            return ws
-
-        return handler
 
     async def _overlay_helper_handler(self, request: web.Request) -> web.FileResponse:
         """Serve the reconnecting browser helper for OBS overlays."""
