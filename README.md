@@ -31,7 +31,7 @@ Each new flow or integration you want to add to your project should be organized
 
 In your Python file, you create a `Feature` object with a name (used to register it with the proxy under `http://localhost:<port>/<name>`), a list of event types to listen to, and the path to the folder containing your `index.html` and optional css/js files (usually `Path(__file__).parent`).
 
-You can then attach a data source, which registers itself with the proxy under `http://localhost:<port>/<name>/ws/<source_name>`, and pass it two optional methods: `on_message` and `transform`.
+You can then attach a data source, which registers itself with the proxy under `http://localhost:<port>/<name>/ws/<source_name>`, and pass it two optional methods: `on_ws_response` and `on_events_transform`.
 
 ## Creating a feature
 
@@ -60,7 +60,7 @@ def main() -> None:
         event_types=[ChatMessageEvent, DeletedMessageEvent],
         static_dir=Path(__file__).parent,
     )
-    feature.add_source("chat_ws", transform=handling)
+    feature.add_source("chat_ws", on_events_transform=handling)
     feature.start()
 
 
