@@ -72,6 +72,9 @@ class Feature(Generic[E]):
         self.queue_maxsize = queue_maxsize
         self.client_send_timeout = client_send_timeout
         self._sources: dict[str, _SourceContext[E]] = {}
+        self._routes: list[
+            tuple[str, str, Callable[[web.Request], Awaitable[web.StreamResponse]]]
+        ] = []
         self.logger = VerboseLogger(self.__class__.__name__, verbose)
         self._hub_listener = HubListener(self.hub_url, self._on_hub_event, self.logger)
 
@@ -102,11 +105,23 @@ class Feature(Generic[E]):
         )
         self._sources[name] = _SourceContext(pipe, on_events_transform)
         self.logger.info_v(
-            "Source '%s' registered: on_event_transform=%s, on_message=%s",
+            "Source '%s' registered: on_event_transform=%s, on_ws_response=%s",
             name,
             on_events_transform is not None,
             on_ws_response is not None,
         )
+
+    def add_route(
+        self,
+        method: str,
+        path: str,
+        handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
+    ) -> None:
+        """
+        Register a custom HTTP route on the feature's app.
+        """
+        self._routes.append((method, path, handler))
+        self.logger.info_v("Registered custom route %s %s", method, path)
 
     async def send(self, source_name: str, payload: dict) -> None:
         """
@@ -180,6 +195,9 @@ class Feature(Generic[E]):
             self.logger.info_v(
                 "Registered route at '/ws/%s' for source '%s'", name, name
             )
+        for method, path, handler in self._routes:
+            app.router.add_route(method, path, handler)
+            self.logger.info_v("Registered route %s %s", method, path)
         app.router.add_get("/pymear-overlay.js", self._overlay_helper_handler)
         app.router.add_get("/", self._index_handler)
         app.router.add_static("/", path=self.static_dir, show_index=False)
